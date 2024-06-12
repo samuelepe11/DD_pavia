@@ -109,7 +109,6 @@ class MaskSurvey:
         return mask, adjust_specifics
 
     def flip_img(self, direction_ind, bright, contrast, adjust_specifics, count, mask_id):
-        print("ok")
         adjust_specifics[mask_id, direction_ind] = 1 - adjust_specifics[mask_id, direction_ind]
         mask = self.adjust_img(bright, contrast, adjust_specifics, count, mask_id)
 
@@ -123,13 +122,22 @@ class MaskSurvey:
         img = np.int32(img / np.max(img) * 255)
         return projection_id, img
 
-    def next_img(self, count, box, ok_flag):
+    def next_img(self, count, name, box, ok_flag):
         # Verify if task is completed
         if not box and not ok_flag:
             gr.Warning("ATTENZIONE! Per proseguire dovresti evidenziare la frattura in almeno una proiezione altrimenti"
                        " dovresti segnalarne l'assenza con l'apposito checkbox.")
         else:
-            count += 1
+            # Create an empty folder for the no-fracture segment
+            if box:
+                img_name = self.desired_instances[count]
+                pt_folder = self.mask_dir + name
+                if img_name not in os.listdir(pt_folder):
+                    os.mkdir(pt_folder + "/" + img_name)
+
+            # Update counter
+            if not (box and ok_flag):  # Avoid counter incrementation after pressing of Start button
+                count += 1
 
         # Get next images
         if count == len(self.desired_instances) - 1:
@@ -177,14 +185,13 @@ class MaskSurvey:
             if instance in os.listdir(pt_folder):
                 annotated_segments.append(instance)
         count = len(annotated_segments)
-        out_txt, _, _, _, _, *mask_blocks = self.next_img(count - 1, True, True)
 
         tab1 = gr.update(interactive=False)
         tab2 = gr.update(interactive=True)
-        return name, out_txt, count, tab1, tab2, *mask_blocks
+        return name, count, tab1, tab2
 
     def display_images(self, block):
-        count = gr.State()
+        count = gr.State(0)
 
         # Add initial fields
         with gr.Tab(label="Autenticazione utente", interactive=True) as tab1:
@@ -198,15 +205,22 @@ class MaskSurvey:
 
             # Add image fields
             adjust_specifics = gr.State(np.zeros((self.max_projection_number, 3)))
+            item = self.dataset.__getitem__(count.value)
             mask_blocks = []
             with gr.Row():
                 for i in range(self.max_projection_number):
                     with gr.Column(min_width=200):
                         # Get image
-                        label = ""
-                        img = None
-                        show_label = False
-                        interactive = False
+                        try:
+                            projection_id, img = self.get_img(mask_id=i, item=item)
+                            label = "Vista: " + projection_id.translated_value()
+                            show_label = True
+                            interactive = True
+                        except IndexError:
+                            label = ""
+                            img = None
+                            show_label = False
+                            interactive = False
 
                         # Add identifier to the image
                         mask_id = gr.State(i)
@@ -275,9 +289,13 @@ class MaskSurvey:
             # Add final buttons
             box = gr.Checkbox(label="Non ho individuato alcuna frattura")
             next_button = gr.Button(value="Vai alla prossima immagine", icon="icons/next.png")
-            next_button.click(fn=self.next_img, inputs=[count, box, ok_flag],
+            next_button.click(fn=self.next_img, inputs=[count, name, box, ok_flag],
                               outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks)
-        start.click(self.change_page, inputs=[name], outputs=[name, txt, count, tab1, tab2] + mask_blocks)
+        start.click(self.change_page, inputs=[name], outputs=[name, count, tab1, tab2], concurrency_id="start",
+                    concurrency_limit=1)
+        start.click(fn=self.next_img, inputs=[count, name, gr.State(True), gr.State(True)],
+                    outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks, concurrency_id="start",
+                    concurrency_limit=1)
 
     def get_label(self, counter, segment):
         return ("Segmento  " + str(counter + 1) + " / " + str(len(self.desired_instances)) +
@@ -298,7 +316,6 @@ class MaskSurvey:
 
         # Launch the application
         x = block.launch(share=True)
-        print(x)
 
     @staticmethod
     def remove_adjust(img, mask_id, adjust_specifics):
@@ -326,5 +343,6 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Launch app
+    print("Add '?__theme=dark' at the end of the link")
     survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances)
-    survey.build_app()  # Add "?__theme=dark" to the end of the link
+    survey.build_app()
