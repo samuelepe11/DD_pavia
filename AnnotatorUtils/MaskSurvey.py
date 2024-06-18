@@ -5,6 +5,7 @@ import gradio as gr
 import numpy as np
 import os
 import pytz
+import cv2
 from datetime import datetime
 
 from DataUtils.XrayDataset import XrayDataset
@@ -21,13 +22,15 @@ class MaskSurvey:
     avoid_interaction = gr.update(interactive=False)
     normal_scale_value = 1
 
-    def __init__(self, dataset, desired_instances):
+    def __init__(self, dataset, desired_instances, blur=False):
         self.dataset = dataset
         self.mask_dir = dataset.data_dir + MaskSurvey.mask_fold
         self.max_projection_number = dataset.max_projection_number()
 
         self.desired_instances = desired_instances
         random.shuffle(self.desired_instances)
+
+        self.blur = blur
 
     def process_mask(self, name, count, mask_id, adjust_specifics, mask):
         # Define mask name
@@ -95,6 +98,16 @@ class MaskSurvey:
         rotate_id = adjust_specifics[mask_id, 0] + 1
         adjust_specifics[mask_id, 0] = rotate_id % 4
 
+        # Undo flips
+        if adjust_specifics[mask_id, 1]:
+            adjust_specifics[mask_id, 1] = 0
+            gr.Warning("ATTENZIONE! L'operazione 'Specchia' è stata annullata. Ti consiglio di definire prima "
+                       "l'orientazione dell'immmagine e specchiarla o capovolgerla solo in seguito.")
+        if adjust_specifics[mask_id, 2]:
+            adjust_specifics[mask_id, 2] = 0
+            gr.Warning("ATTENZIONE! L'operazione 'Capovolgi' è stata annullata. Ti consiglio di definire prima "
+                       "l'orientazione dell'immmagine e specchiarla o capovolgerla solo in seguito.")
+
         mask = self.adjust_img(bright, contrast, adjust_specifics, count, mask_id)
         return mask, adjust_specifics
 
@@ -120,24 +133,30 @@ class MaskSurvey:
         projection_id, img, _ = item[mask_id]
 
         img = np.int32(img / np.max(img) * 255)
+        if self.blur:
+            img = cv2.GaussianBlur(img.astype(np.uint8), (105, 105), 0)
         return projection_id, img
 
     def next_img(self, count, name, box, ok_flag):
         # Verify if task is completed
         if not box and not ok_flag:
+            # Generate warning
             gr.Warning("ATTENZIONE! Per proseguire dovresti evidenziare la frattura in almeno una proiezione altrimenti"
                        " dovresti segnalarne l'assenza con l'apposito checkbox.")
         else:
-            # Create an empty folder for the no-fracture segment
-            if box:
+            if box and ok_flag:
+                gr.Warning("ATTENZIONE! Nel set di immagini numero " + str(count + 1) + " hai inviato una o più "
+                           + "maschere, ma hai anche contrassegnato il checkbox per l'assenza di frattura. Vista "
+                           + "l'inconsistenza, ti chiediamo di comunicarci via mail se le maschere caricate sono "
+                           + "errate.")
+            elif box and not ok_flag:
+                # Create an empty folder for the non-fracture segments
                 img_name = self.desired_instances[count]
                 pt_folder = self.mask_dir + name
                 if img_name not in os.listdir(pt_folder):
                     os.mkdir(pt_folder + "/" + img_name)
 
-            # Update counter
-            if not (box and ok_flag):  # Avoid counter incrementation after pressing of Start button
-                count += 1
+            count += 1
 
         # Get next images
         if count == len(self.desired_instances) - 1:
@@ -171,6 +190,13 @@ class MaskSurvey:
         return out_txt, count, box, ok_flag, adjust_specifics, *mask_blocks
 
     def change_page(self, name):
+        # Check for name correctness
+        for char in ["^", "~", "\"", "#", "%", "&", "*", ":", "<", ">", "?", "/", "\\", "{", "}", "|"]:
+            if char in name:
+                gr.Warning("ATTENZIONE! Il tuo nominativo non può contenere nessuno dei seguenti caratteri:\n"
+                           "^ ~ \" # % & * : < > ? / \\ { } |")
+                return name, -1, gr.update(), gr.update()
+
         # Create folder
         if name == "":
             now = datetime.now(tz=pytz.timezone("Europe/Rome"))
@@ -188,7 +214,7 @@ class MaskSurvey:
 
         tab1 = gr.update(interactive=False)
         tab2 = gr.update(interactive=True)
-        return name, count, tab1, tab2
+        return name, count - 1, tab1, tab2
 
     def display_images(self, block):
         count = gr.State(0)
@@ -291,9 +317,9 @@ class MaskSurvey:
             next_button = gr.Button(value="Vai alla prossima immagine", icon="icons/next.png")
             next_button.click(fn=self.next_img, inputs=[count, name, box, ok_flag],
                               outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks)
-        start.click(self.change_page, inputs=[name], outputs=[name, count, tab1, tab2], concurrency_id="start",
+        start.click(fn=self.change_page, inputs=[name], outputs=[name, count, tab1, tab2], concurrency_id="start",
                     concurrency_limit=1)
-        start.click(fn=self.next_img, inputs=[count, name, gr.State(True), gr.State(True)],
+        start.click(fn=self.next_img, inputs=[count, name, gr.State(False), gr.State(True)],
                     outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks, concurrency_id="start",
                     concurrency_limit=1)
 
@@ -307,7 +333,8 @@ class MaskSurvey:
             gr.Markdown(
                 """
                 # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Basati su Evidenza per Diagnosi e Pianificazione di Terapie
-                #### Per favore, con l'aiuto delle diverse proiezioni mostrate, individua la frattura in ogni immagine proposta, colorando la zona interessata.
+                #### Dopo aver inserito il tuo nominativo, vedrai in successione delle immagini radiografiche relative a più soggetti: ogni gruppo di immagini rappresenta più proiezioni dello stesso segmento vertebrale di ogni paziente.
+                #### Se è presente una frattura, ti chiediamo di evidenziarla colorando la zona interessata in tutte le immagini dove la frattura risulta effettivamente osservabile (anche se parzialmente). Ti invitiamo a contornare o colorare tale zona con adeguata precisione.
                 #### Qualora la frattura non fosse presente, segnalalo con l'apposito checkbox.\n
                 #### BUON LAVORO!
                 """
@@ -338,11 +365,12 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     dataset_name1 = "xray_dataset_validation"
+    blur1 = True
 
     # Define data
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Launch app
     print("Add '?__theme=dark' at the end of the link")
-    survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances)
+    survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, blur=blur1)
     survey.build_app()
