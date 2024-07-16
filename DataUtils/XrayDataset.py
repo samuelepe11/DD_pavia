@@ -57,7 +57,7 @@ class XrayDataset(Dataset):
         pt_id, segment_id = PatientInstance.get_patient_and_segment(instance_name)
         pt_instance = self.get_patient(pt_id)
         segment_data = pt_instance.get_segment_images(segment_id=segment_id)
-        return segment_data
+        return segment_data, (pt_id, segment_id)
 
     def __len__(self):
         return self.len
@@ -307,6 +307,7 @@ class XrayDataset(Dataset):
             # set_type == SetType.TRAIN
             self.dicom_instances = self.training_names
             ref_pts = self.training_pts
+        self.len = len(self.dicom_instances)
         self.patient_data = [pt for pt in self.patient_data if pt.id in ref_pts]
 
     def max_projection_number(self):
@@ -324,13 +325,34 @@ class XrayDataset(Dataset):
             dataset = pickle.load(file)
         print("The dataset", dataset_name, "have been loaded!")
 
-        # Correct mistake in previously stored files
+        # Correct mistakes in previously stored classes
         if dataset.working_dir == "./../":
             addon = "./."
             for attr in dataset.__dict__.keys():
                 val = dataset.__dict__[attr]
                 if isinstance(val, str) and val.startswith("./../"):
-                    val = addon + val
+                    dataset.__dict__[attr] = addon + val
+        dataset.len = len(dataset.dicom_instances)
+
+        # Correct mistakes in previously stored files
+        for i in range(dataset.len):
+            instance = dataset.dicom_instances[i]
+            instance_list = list(instance)
+            if "Copia" in instance:
+                dataset.dicom_instances[i] = "".join(instance_list[:4])
+            elif len(instance) > 4:
+                dataset.dicom_instances[i] = "".join(instance_list[:3] + [instance_list[4]])
+
+        # Correct mistakes in the original data files
+        for datum in dataset.patient_data:
+            if datum.id == 112:
+                datum.pt_data = [datum.pt_data[0], datum.pt_data[2]]
+            if datum.id == 335:
+                datum.segments = ["C", datum.segments[0]]
+            if datum.id == 117:
+                datum.segments = ["C"] + datum.segments[:2]
+            if datum.id == 81:
+                datum.segments = [datum.segments[0], "L"]
 
         if set_type is not None:
             dataset.define_set_type(set_type)

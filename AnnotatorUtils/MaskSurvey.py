@@ -10,6 +10,7 @@ from datetime import datetime
 
 from DataUtils.XrayDataset import XrayDataset
 from DataUtils.PatientInstance import PatientInstance
+from Enumerators.ProjectionType import ProjectionType
 
 
 # Class
@@ -29,34 +30,41 @@ class MaskSurvey:
 
         self.desired_instances = desired_instances
         random.shuffle(self.desired_instances)
+        print("Item name:")
+        for i, name in enumerate(self.desired_instances):
+            print(" " + str(i + 1) + ") " + name)
 
         self.blur = blur
 
     def process_mask(self, name, count, mask_id, adjust_specifics, mask):
-        # Define mask name
-        pt_folder = self.mask_dir + name
-        img_name = self.desired_instances[count]
-        segment_dir = pt_folder + "/" + img_name
-        if img_name not in os.listdir(pt_folder):
-            os.mkdir(segment_dir)
-        projections = os.listdir(segment_dir)
+        if count != len(self.desired_instances):
+            # Define mask name
+            pt_folder = self.mask_dir + name
+            img_name = self.desired_instances[count]
+            segment_dir = pt_folder + "/" + img_name
+            if img_name not in os.listdir(pt_folder):
+                os.mkdir(segment_dir)
+            projections = os.listdir(segment_dir)
 
-        # Store mask
-        gt_mask = mask["layers"][0]
-        gt_mask = MaskSurvey.remove_adjust(gt_mask, mask_id, adjust_specifics)
-        fig = plt.figure()
-        ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
-        ax.axis("off")
-        plt.imshow(gt_mask, "gray")
+            # Store mask
+            gt_mask = mask["layers"][0]
+            gt_mask = MaskSurvey.remove_adjust(gt_mask, mask_id, adjust_specifics)
+            fig = plt.figure()
+            ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
+            ax.axis("off")
+            plt.imshow(gt_mask, "gray")
 
-        projection_name = "projection" + str(mask_id)
-        images = [img for img in projections if projection_name in img]
-        plt.savefig(segment_dir + "/" + projection_name + "_vers" + str(len(images)) + ".jpg",
-                    format="tif", bbox_inches="tight", pad_inches=0)
-        plt.close(fig)
+            projection_name = "projection" + str(mask_id)
+            images = [img for img in projections if projection_name in img]
+            plt.savefig(segment_dir + "/" + projection_name + "_vers" + str(len(images)) + ".jpg",
+                        format="tif", bbox_inches="tight", pad_inches=0)
+            plt.close(fig)
 
-        button = gr.update(icon="./icons/checked.png")
-        ok_flag = True
+            button = gr.update(icon="./icons/checked.png")
+            ok_flag = True
+        else:
+            button = gr.update()
+            ok_flag = False
         return button, name, ok_flag
 
     def avoid_clear_action(self, count, mask_id, adjust_specifics):
@@ -127,39 +135,44 @@ class MaskSurvey:
 
         return mask, adjust_specifics
 
-    def get_img(self, mask_id, item=None, count=None):
-        if item is None:
-            item = self.dataset.__getitem__(count)
-        projection_id, img, _ = item[mask_id]
+    def get_img(self, mask_id, item=None, count=None, first_display=False):
+        if first_display:
+            projection_id = ProjectionType.AP
+            img = np.zeros((10, 10))
+        else:
+            if item is None:
+                item = self.dataset.__getitem__(count)
+            projection_id, img, _ = item[mask_id]
 
-        img = np.int32(img / np.max(img) * 255)
-        if self.blur:
-            img = cv2.GaussianBlur(img.astype(np.uint8), (105, 105), 0)
+            img = np.int32(img / np.max(img) * 255)
+            if self.blur:
+                img = cv2.GaussianBlur(img.astype(np.uint8), (105, 105), 0)
         return projection_id, img
 
     def next_img(self, count, name, box, ok_flag):
-        # Verify if task is completed
-        if not box and not ok_flag:
-            # Generate warning
-            gr.Warning("ATTENZIONE! Per proseguire dovresti evidenziare la frattura in almeno una proiezione altrimenti"
-                       " dovresti segnalarne l'assenza con l'apposito checkbox.")
-        else:
-            if box and ok_flag:
-                gr.Warning("ATTENZIONE! Nel set di immagini numero " + str(count + 1) + " hai inviato una o più "
-                           + "maschere, ma hai anche contrassegnato il checkbox per l'assenza di frattura. Vista "
-                           + "l'inconsistenza, ti chiediamo di comunicarci via mail se le maschere caricate sono "
-                           + "errate.")
-            elif box and not ok_flag:
-                # Create an empty folder for the non-fracture segments
-                img_name = self.desired_instances[count]
-                pt_folder = self.mask_dir + name
-                if img_name not in os.listdir(pt_folder):
-                    os.mkdir(pt_folder + "/" + img_name)
+        if count != len(self.desired_instances):
+            # Verify if task is completed
+            if not box and not ok_flag:
+                # Generate warning
+                gr.Warning("ATTENZIONE! Per proseguire dovresti evidenziare la frattura in almeno una proiezione altrimenti"
+                           " dovresti segnalarne l'assenza con l'apposito checkbox.")
+            else:
+                if box and ok_flag:
+                    gr.Warning("ATTENZIONE! Nel set di immagini numero " + str(count + 1) + " hai inviato una o più "
+                               + "maschere, ma hai anche contrassegnato il checkbox per l'assenza di frattura. Vista "
+                               + "l'inconsistenza, ti chiediamo di comunicarci via mail se le maschere caricate sono "
+                               + "errate.")
+                elif box and not ok_flag:
+                    # Create an empty folder for the non-fracture segments
+                    img_name = self.desired_instances[count]
+                    pt_folder = self.mask_dir + name
+                    if img_name not in os.listdir(pt_folder):
+                        os.mkdir(pt_folder + "/" + img_name)
 
-            count += 1
+                count += 1
 
         # Get next images
-        if count == len(self.desired_instances) - 1:
+        if count == len(self.desired_instances):
             out_txt = "GRAZIE PER IL TUO CONTRIBUTO! Ora puoi chiudere l'applicazione."
             mask_blocks = self.max_projection_number * (5 * [self.avoid_interaction] + [self.empty_mask_update] +
                                                         [gr.update(icon="icons/unchecked.png", interactive=True)])
@@ -211,10 +224,14 @@ class MaskSurvey:
             if instance in os.listdir(pt_folder):
                 annotated_segments.append(instance)
         count = len(annotated_segments)
+        if count > 0:
+            count -= 2
+        else:
+            count = -1
 
         tab1 = gr.update(interactive=False)
         tab2 = gr.update(interactive=True)
-        return name, count - 1, tab1, tab2
+        return name, count, tab1, tab2
 
     def display_images(self, block):
         count = gr.State(0)
@@ -231,22 +248,15 @@ class MaskSurvey:
 
             # Add image fields
             adjust_specifics = gr.State(np.zeros((self.max_projection_number, 3)))
-            item = self.dataset.__getitem__(count.value)
             mask_blocks = []
             with gr.Row():
                 for i in range(self.max_projection_number):
                     with gr.Column(min_width=200):
                         # Get image
-                        try:
-                            projection_id, img = self.get_img(mask_id=i, item=item)
-                            label = "Vista: " + projection_id.translated_value()
-                            show_label = True
-                            interactive = True
-                        except IndexError:
-                            label = ""
-                            img = None
-                            show_label = False
-                            interactive = False
+                        projection_id, img = self.get_img(mask_id=i, first_display=True)
+                        label = "Vista: " + projection_id.translated_value()
+                        show_label = True
+                        interactive = True
 
                         # Add identifier to the image
                         mask_id = gr.State(i)
@@ -309,6 +319,7 @@ class MaskSurvey:
                                              outputs=[mask, adjust_specifics])
                             mask.clear(fn=self.avoid_clear_action, inputs=[count, mask_id, adjust_specifics],
                                        outputs=[mask, bright, contrast, adjust_specifics])
+                            button.click(fn=self.notify_click, inputs=[mask_id])
                             button.click(fn=self.process_mask, inputs=[name, count, mask_id, adjust_specifics, mask],
                                          outputs=[button, name, ok_flag])
 
@@ -335,14 +346,15 @@ class MaskSurvey:
                 # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Basati su Evidenza per Diagnosi e Pianificazione di Terapie
                 #### Dopo aver inserito il tuo nominativo, vedrai in successione delle immagini radiografiche relative a più soggetti: ogni gruppo di immagini rappresenta più proiezioni dello stesso segmento vertebrale di ogni paziente.
                 #### Se è presente una frattura, ti chiediamo di evidenziarla colorando la zona interessata in tutte le immagini dove la frattura risulta effettivamente osservabile (anche se parzialmente). Ti invitiamo a contornare o colorare tale zona con adeguata precisione.
-                #### Qualora la frattura non fosse presente, segnalalo con l'apposito checkbox.\n
-                #### BUON LAVORO!
+                #### Qualora la frattura non fosse presente, segnalalo con l'apposito checkbox in fondo alla pagina.\n
+                #### ATTENZIONE! Se la piattaforma dovesse segnalare un errore nel caricamento di una o più componenti (_Error_ sulla componente) oppure un problema di connessione (_Connection errored out._ come pop-up in alto a destra), ciò potrebbe essere legato ad un'instabilità della nostra rete di laboratorio: per risolvere il problema basterà ricaricare la pagina e ripetere l'autenticazione.
+                ### BUON LAVORO!
                 """
             )
             self.display_images(block)
 
         # Launch the application
-        x = block.launch(share=True)
+        block.launch(share=True)
 
     @staticmethod
     def remove_adjust(img, mask_id, adjust_specifics):
@@ -353,6 +365,10 @@ class MaskSurvey:
         img = np.rot90(img, k=adjust_specifics[mask_id, 0] * -1)
 
         return img
+
+    @staticmethod
+    def notify_click(mask_id):
+        gr.Info("Invio maschera " + str(mask_id + 1) + " in corso...")
 
 
 # Main
@@ -365,7 +381,7 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     dataset_name1 = "xray_dataset_validation"
-    blur1 = True
+    blur1 = False
 
     # Define data
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)

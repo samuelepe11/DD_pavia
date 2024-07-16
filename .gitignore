@@ -1,3 +1,4 @@
 .idea/
 __pycache__/
 venv/
+DataUtils/medsam_vit_b.pth
