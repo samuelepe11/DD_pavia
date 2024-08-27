@@ -22,7 +22,7 @@ class Preprocessor:
     # Define class attributes
     segmentation_fold = "segmentation_results/"
 
-    def __init__(self, dataset):
+    def __init__(self, dataset, only_apply=False):
         self.dataset = dataset
         self.segmentation_dir = dataset.results_dir + Preprocessor.segmentation_fold
 
@@ -31,13 +31,15 @@ class Preprocessor:
             self.device = "cuda"
         else:
             self.device = "cpu"
-        medsam = sam_model_registry["vit_b"](checkpoint="medsam_vit_b.pth")
-        self.medsam = medsam.to(self.device)
-        self.medsam.eval()
+
+        if not only_apply:
+            medsam = sam_model_registry["vit_b"](checkpoint="medsam_vit_b.pth")
+            self.medsam = medsam.to(self.device)
+            self.medsam.eval()
 
         self.temp_path = None
 
-    def preprocess(self, pt_ind=None, segm_ind=None, proj_id=None, img=None, segm=None, downsampling_iterates = 3,
+    def preprocess(self, pt_ind=None, segm_ind=None, proj_id=None, img=None, segm=None, downsampling_iterates=3,
                    temp_path_addon="", show=True):
         if show:
             plt.figure(figsize=(10, 5))
@@ -234,6 +236,20 @@ class Preprocessor:
             plt.savefig(temp_path + "medsam.png", format="png", bbox_inches="tight", pad_inches=0, dpi=300)
             plt.close()
         return mask
+
+    def mask_projection(self, projections, extra_info, set_type):
+        pt_id, segm_id = extra_info
+        instance_name = f"{pt_id:03d}" + segm_id
+
+        folder = self.segmentation_dir + set_type.value + "/" + instance_name
+        masked_projections = []
+        for i in range(len(projections)):
+            projection = projections[i]
+            mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
+            mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
+            masked_projections.append(np.multiply(projection, mask / 255))
+
+        return masked_projections
 
     @staticmethod
     def draw_rect(ax, box):

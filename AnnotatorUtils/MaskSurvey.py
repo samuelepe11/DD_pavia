@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pytz
 import cv2
+import pandas as pd
 from datetime import datetime
 
 from DataUtils.XrayDataset import XrayDataset
@@ -141,7 +142,7 @@ class MaskSurvey:
             img = np.zeros((10, 10))
         else:
             if item is None:
-                item = self.dataset.__getitem__(count)
+                item, _ = self.dataset.__getitem__(count)
             projection_id, img, _ = item[mask_id]
 
             img = np.int32(img / np.max(img) * 255)
@@ -180,7 +181,7 @@ class MaskSurvey:
             instance = self.desired_instances[count]
             _, segment = PatientInstance.get_patient_and_segment(instance)
             out_txt = self.get_label(count, segment)
-            item = self.dataset.__getitem__(count)
+            item, _ = self.dataset.__getitem__(count)
             mask_blocks = []
             for j in range(self.max_projection_number):
                 try:
@@ -325,7 +326,7 @@ class MaskSurvey:
 
             # Add final buttons
             box = gr.Checkbox(label="Non ho individuato alcuna frattura")
-            next_button = gr.Button(value="Vai alla prossima immagine", icon="icons/next.png")
+            next_button = gr.Button(value="Vai al prossimo gruppo di immagini", icon="icons/next.png")
             next_button.click(fn=self.next_img, inputs=[count, name, box, ok_flag],
                               outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks)
         start.click(fn=self.change_page, inputs=[name], outputs=[name, count, tab1, tab2], concurrency_id="start",
@@ -356,6 +357,101 @@ class MaskSurvey:
         # Launch the application
         block.launch(share=True)
 
+    def check_collected_masks(self, round_precision=2):
+        # Collect classification outcome
+        print("-------------------------------------------------------------------------------------------------------")
+        users = [x for x in os.listdir(self.mask_dir) if ".csv" not in x]
+        col_names = ["Fracture position"] + users
+        all_labels = []
+        acc = [0] * len(users)
+        user_accuracies = dict(zip(users, acc))
+        and_accuracy = 0
+        or_accuracy = 0
+        majority_accuracy = 0
+        n_instances = len(self.desired_instances)
+        for i in range(n_instances):
+            item_name = self.desired_instances[i]
+            instance, _ = self.dataset.__getitem__(i)
+            labels = [instance[0][-1]]
+            for user in users:
+                user_label = int(len(os.listdir(self.mask_dir + "/" + user + "/" + item_name)) > 0)
+                labels.append(user_label)
+                if user_label == int(labels[0] != ""):
+                    user_accuracies[user] += 1
+            all_labels.append(labels)
+
+            user_labels = np.array(labels[1:])
+            gt_label = np.array(int(labels[0] != ""))
+            if np.all(user_labels == gt_label):
+                and_accuracy += 1
+            if np.any(user_labels == gt_label):
+                or_accuracy += 1
+            if np.sum(user_labels == gt_label) >= len(users) / 2:
+                majority_accuracy += 1
+        df = pd.DataFrame(all_labels, columns=col_names)
+        df.to_csv(self.mask_dir + "classification_results.csv", index=False)
+
+        # Normalize accuracies
+        user_accuracies = {k: MaskSurvey.normalize_acc(x, n_instances) for k, x in user_accuracies.items()}
+        for k in user_accuracies.keys():
+            print("Accuracy for " + k + ": " + str(user_accuracies[k]) + "%")
+        print()
+        and_accuracy = MaskSurvey.normalize_acc(and_accuracy, n_instances)
+        print("Accuracy if every user is correct: " + str(and_accuracy) + "%")
+        or_accuracy = MaskSurvey.normalize_acc(or_accuracy, n_instances)
+        print("Accuracy if at least one user is correct: " + str(or_accuracy) + "%")
+        majority_accuracy = MaskSurvey.normalize_acc(majority_accuracy, n_instances)
+        print("Accuracy if the majority of users are correct: " + str(majority_accuracy) + "%")
+
+        # Check mask-projection correspondence
+        print("-------------------------------------------------------------------------------------------------------")
+        for user in users:
+            print("Correspondence check for " + user + "...")
+            for i in range(n_instances):
+                instance, _ = self.dataset.__getitem__(i)
+                instance_name = self.desired_instances[i]
+                instance_path = self.mask_dir + user + "/" + instance_name
+                masks = os.listdir(instance_path)
+                if len(masks) == 0:
+                    continue
+                unique_projections = np.unique(np.array([int(mask[10]) for mask in masks]))
+                if not np.isin(unique_projections, np.arange(len(instance))).all():
+                    print(" > There are too many masks for " + instance_name)
+                for mask in masks:
+                    proj_id = int(mask[10])
+                    # Check version numbers
+                    if "vers0" not in mask:
+                        num_vers = int(mask[-5])
+                        for vers in range(num_vers):
+                            if mask[:-5] + str(vers) + ".jpg" not in masks:
+                                print(" > Version " + str(vers) + " of projection " + str(proj_id) + " is missing for " + instance_name)
+
+                    # Check mask sizes
+                    mask_shape = cv2.imread(instance_path + "/" + mask).shape[:-1]
+                    try:
+                        img_shape = instance[proj_id][1].shape
+                        w_ratio = mask_shape[1] / img_shape[1]
+                        h_ratio = mask_shape[0] / img_shape[0]
+                        wh_ratio = w_ratio / h_ratio
+                        if round(wh_ratio, round_precision) != 1:
+                            print(" > " + mask + " does not correspond in shape to the original projection for " + instance_name)
+                            self.find_shape_matches(mask_shape, round_precision)
+                    except IndexError:
+                        print(" > " + mask + " has no correspondent projection for " + instance_name)
+                        self.find_shape_matches(mask_shape, round_precision)
+            print()
+
+    def find_shape_matches(self, mask_shape, round_precision=2):
+        for i in range(len(self.desired_instances)):
+            instance, _ = self.dataset.__getitem__(i)
+            for j in range(len(instance)):
+                img_shape = instance[j][1].shape
+                w_ratio = mask_shape[1] / img_shape[1]
+                h_ratio = mask_shape[0] / img_shape[0]
+                wh_ratio = w_ratio / h_ratio
+                if round(wh_ratio, round_precision) == 1:
+                    print("    - Possible match found in projection " + str(j) + " of " + self.desired_instances[i])
+
     @staticmethod
     def remove_adjust(img, mask_id, adjust_specifics):
         if adjust_specifics[mask_id, 2]:
@@ -369,6 +465,10 @@ class MaskSurvey:
     @staticmethod
     def notify_click(mask_id):
         gr.Info("Invio maschera " + str(mask_id + 1) + " in corso...")
+
+    @staticmethod
+    def normalize_acc(x, n_instances):
+        return np.round(x / n_instances * 100, 2)
 
 
 # Main
@@ -387,6 +487,11 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Launch app
-    print("Add '?__theme=dark' at the end of the link")
     survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, blur=blur1)
-    survey.build_app()
+    print("Add '?__theme=dark' at the end of the link")
+    # survey.build_app()
+
+    # Check masks
+    survey.check_collected_masks()
+
+    print()

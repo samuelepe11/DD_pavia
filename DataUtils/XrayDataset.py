@@ -18,6 +18,7 @@ class XrayDataset(Dataset):
     # Define class attributes
     data_fold = "dati_s_matteo/"
     results_fold = "results/"
+    models_fold = "models/"
     preliminary_fold = "preliminary_analysis/"
     info_names = ["id", "sex", "birth", "segments", "projections", "spondylarthrosis_present", "label",
                   "fracture_position", "clinical_report", "ct_present", "ct_date", "ct_report", "mri_present",
@@ -105,7 +106,7 @@ class XrayDataset(Dataset):
         instance_name = self.dicom_instances[ind]
         pt, segment = PatientInstance.get_patient_and_segment(instance_name)
         title = "Patient " + str(pt) + " - " + XrayDataset.get_segment_name(segment) + " segment"
-        item = self.__getitem__(ind)
+        item, _ = self.__getitem__(ind)
         n_projections = len(item)
 
         plt.figure(figsize=(5 * n_projections, 5))
@@ -345,14 +346,37 @@ class XrayDataset(Dataset):
 
         # Correct mistakes in the original data files
         for datum in dataset.patient_data:
-            if datum.id == 112:
-                datum.pt_data = [datum.pt_data[0], datum.pt_data[2]]
-            if datum.id == 335:
-                datum.segments = ["C", datum.segments[0]]
-            if datum.id == 117:
-                datum.segments = ["C"] + datum.segments[:2]
+            if datum.fracture_position is not None:
+                frac_pos = []
+                for pos in datum.fracture_position:
+                    new_pos = pos.replace(" ", "").replace("...", "")
+                    if "Tratto" in pos:
+                        poses = pos.split("Tratto")
+                        frac_pos.append(poses[0])
+                        new_pos = poses[1]
+                    frac_pos.append(new_pos)
+
+            for i in range(len(datum.pt_data)):
+                segm = datum.pt_data[i]
+                for j in range(len(segm)):
+                    temp = list(segm[j])
+                    temp[2] = temp[2].replace("...", "").replace(" ", "")
+                    if "Tratto" in temp[2]:
+                        temp1 = temp[2].split("Tratto")
+                        temp[2] = temp1[0] if datum.segments[i] in temp1[0] else temp1[1]
+                    datum.pt_data[i][j] = tuple(temp)
             if datum.id == 81:
                 datum.segments = [datum.segments[0], "L"]
+            if datum.id == 335:
+                datum.segments = ["C", datum.segments[0]]
+            if datum.id == 112:
+                datum.pt_data = [datum.pt_data[0], datum.pt_data[2]]
+            if datum.id == 117:
+                datum.segments = ["C"] + datum.segments[:2]
+            if datum.id == 161:
+                datum.pt_data[3].append(datum.pt_data[2][2])
+                datum.pt_data[3].append(datum.pt_data[2][3])
+                datum.pt_data[2] = datum.pt_data[2][:2]
 
         if set_type is not None:
             dataset.define_set_type(set_type)
@@ -407,14 +431,14 @@ if __name__ == "__main__":
     # dataset1.read_dicom_folder(dicom_folder_name=dicom_folder_name1)
 
     # Load  dataset
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
+    # dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Divide dataset
     train_perc1 = 0.8
     # dataset1.divide_dataset(train_perc=train_perc1)
 
     # Store dataset
-    dataset1.store_dataset(dataset_name=dataset_name1)
+    # dataset1.store_dataset(dataset_name=dataset_name1)
 
     # Compute statistics
     print()
@@ -436,9 +460,13 @@ if __name__ == "__main__":
     # dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, set_type=SetType.TEST)
     # dataset1.count_data()
 
+    # Load an already split datasets
+    dataset_name1 = "xray_dataset_validation"
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
+
     # Show items
     ind1 = 1
     # dataset1.show_item(ind=ind1)
 
-    pt_id1 = 66
-    # dataset1.show_patient(pt_id=pt_id1)
+    pt_id1 = 161
+    dataset1.show_patient(pt_id=pt_id1)
