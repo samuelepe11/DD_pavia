@@ -34,10 +34,13 @@ class NetworkTrainer:
             os.mkdir(self.results_dir + model_name)
         self.results_dir += model_name + "/"
 
+        self.use_cuda = torch.cuda.is_available() and use_cuda
+        self.device = torch.device("cuda" if self.use_cuda else "cpu")
+
         self.net_type = net_type
         self.net_params = net_params
         if net_type == NetType.RES_NEXT50:
-            self.net = BaseResNeXt50(params=net_params)
+            self.net = BaseResNeXt50(params=net_params, device=self.device)
         else:
             self.net = None
             print("Selected network is not avalable")
@@ -57,9 +60,6 @@ class NetworkTrainer:
         self.val_losses = []
         self.val_eval_epochs = []
         self.optuna_study = None
-
-        self.use_cuda = torch.cuda.is_available() and use_cuda
-        self.device = torch.device("cuda" if self.use_cuda else "cpu")
 
         # Load datasets
         self.train_data = train_data
@@ -90,7 +90,7 @@ class NetworkTrainer:
         for epoch in range(self.epochs):
             net.set_training(True)
             train_loss = 0
-            ##random.shuffle(self.train_data)
+            random.shuffle(self.train_data.dicom_instances)
             for instance in self.train_data:
                 loss, _, _ = self.apply_network(net, instance, set_type=SetType.TRAIN)
                 train_loss += loss.item()
@@ -138,7 +138,7 @@ class NetworkTrainer:
             return val_stats.f1
 
     def apply_network(self, net, instance, set_type):
-        y = int(instance[0][-1] != "")
+        y = int(instance[0][0][-1] != "")
         y = torch.tensor([y]).to(torch.float32)
         y = y.unsqueeze(0)
         y = y.to(self.device)
@@ -158,8 +158,6 @@ class NetworkTrainer:
 
             projection = np.resize(projection, (net.input_dim, net.input_dim))
             projection = torch.tensor(projection, dtype=torch.float32)
-            projection = projection.unsqueeze(0)
-            projection = projection.to(self.device)
             adjusted_projections.append(projection)
 
         # Train loss evaluation
@@ -195,12 +193,13 @@ class NetworkTrainer:
             acc = acc.item()
 
         # Get binary confusion matrix
-        cm = NetworkTrainer.compute_binary_confusion_matrix(y_true, y_pred, range(len(self.classes)))
+        desired_classes = range(len(self.classes)) if len(self.classes) > 2 else [1]
+        cm = NetworkTrainer.compute_binary_confusion_matrix(y_true, y_pred, desired_classes)
         tp = cm[0]
         tn = cm[1]
         fp = cm[2]
         fn = cm[3]
-        auc = NetworkTrainer.compute_binary_auc(y_true, y_pred, range(len(self.classes)))
+        auc = NetworkTrainer.compute_binary_auc(y_true, y_pred, desired_classes)
 
         stats = StatsHolder(loss, acc, tp, tn, fp, fn, auc)
         return stats
@@ -228,13 +227,16 @@ class NetworkTrainer:
                 prediction = torch.argmax(output, dim=1)
 
                 # Store values for Confusion Matrix calculation
+                if len(prediction) == 1:
+                    output = torch.tensor([1 - output, output])
                 y_prob.append(output)
-                y_true.append(y.to(self.device))
+                y_true.append(y)
+
                 y_pred.append(prediction)
 
-            y_prob = torch.concat(y_prob)
-            y_true = torch.concat(y_true)
-            y_pred = torch.concat(y_pred)
+            y_prob = torch.stack(y_prob, dim=0)
+            y_true = torch.concat(y_true).squeeze(1).to(int)
+            y_pred = torch.concat(y_pred).to(int)
 
             loss /= dim
             acc = torch.sum(y_true == y_pred) / dim
@@ -353,7 +355,7 @@ class NetworkTrainer:
 
     @staticmethod
     def compute_binary_confusion_matrix(y_true, y_predicted, classes=None):
-        if classes is None:
+        if classes is None or len(classes) == 1:
             # Classical binary computation (class 0 as negative and class 1 as positive)
             tp = torch.sum((y_predicted == 1) & (y_true == 1))
             tn = torch.sum((y_predicted == 0) & (y_true == 0))
@@ -391,6 +393,8 @@ class NetworkTrainer:
                 out_i = 0.5
             out.append(out_i)
 
+        if len(out) == 1:
+            out = out[0]
         out = np.asarray(out)
         return out
 
@@ -459,33 +463,22 @@ class NetworkTrainer:
     @staticmethod
     def show_performance_table(stats, set_name, boot_stats=None):
         print("Performance for", set_name.upper() + " set:")
-
-        for stat in ["acc", "loss"]:
-            name = StatsHolder.comparable_stats[stat] if stat in StatsHolder.comparable_stats else stat.upper()
-            try:
-                if boot_stats is None:
-                    addon = ""
-                else:
-                    addon = " (std: " + str(np.round(boot_stats.__dict__[stat + "_s"] * 100, 2)) + "%)"
-                print(" - " + name + ": " + str(np.round(stats.__dict__[stat] * 100, 2)) + "%" + addon)
-            except:
-                print(" - " + stat + ": missing information")
-
-        for stat in StatsHolder.table_stats:
+        for stat in ["acc", "loss"] + StatsHolder.table_stats:
             if boot_stats is None:
                 addon = ""
             else:
-                if stat != "mcc":
+                if stat not in ["loss", "mcc"]:
                     s = str(np.round(boot_stats.__dict__[stat + "_s"] * 100, 2)) + "%)"
                 else:
                     s = str(np.round(boot_stats.__dict__[stat + "_s"], 2)) + ")"
                 addon = " (std: " + s
 
-            if stat != "mcc":
-                s = str(np.round(stats.__dict__["target_" + stat] * 100, 2)) + "%"
+            if stat not in ["loss", "mcc"]:
+                s = str(np.round(stats.__dict__[stat] * 100, 2)) + "%"
             else:
-                s = str(np.round(stats.__dict__["target_" + stat], 2))
-            print(" - " + StatsHolder.comparable_stats[stat] + ": " + s + addon)
+                s = str(np.round(stats.__dict__[stat], 2))
+            name = StatsHolder.comparable_stats[stat] if stat in StatsHolder.comparable_stats else stat.upper()
+            print(" - " + name + ": " + s + addon)
 
     @staticmethod
     def show_calibration_table(stats, set_name):
@@ -501,7 +494,7 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "prova"
+    model_name1 = "resnext50"
     net_type1 = NetType.RES_NEXT50
     epochs1 = 1
     trial_n1 = None

@@ -244,10 +244,14 @@ class Preprocessor:
         folder = self.segmentation_dir + set_type.value + "/" + instance_name
         masked_projections = []
         for i in range(len(projections)):
-            projection = projections[i]
-            mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
-            mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
-            masked_projections.append(np.multiply(projection, mask / 255))
+            try:
+                projection = projections[i]
+                mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
+                mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
+                masked_projections.append(np.multiply(projection, mask / 255))
+            except cv2.error:
+                print("Absent preprocessing mask for projection " + str(i) + " of " + instance_name)
+                masked_projections.append(projection)
 
         return masked_projections
 

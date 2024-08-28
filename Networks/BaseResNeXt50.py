@@ -26,13 +26,14 @@ class BaseResNeXt50(nn.Module):
         transforms.ToTensor(),
     ])
 
-    def __init__(self, params=None):
+    def __init__(self, params=None, device="cpu"):
         super(BaseResNeXt50, self).__init__()
 
         # Define pre-trained network
         self.res_next = models.resnext50_32x4d()
         for param in self.res_next.layer4.parameters():
             param.requires_grad = True
+        self.device = device
 
         # Define extra convolutional layers
         self.conv_sizes = [self.res_next.fc.in_features] + [params["n_conv_neurons"]] * params["n_conv_layers"]
@@ -62,9 +63,11 @@ class BaseResNeXt50(nn.Module):
         for projection_type, projection in zip(projection_types, projections):
             # Turn 2D image into 3D image
             output = torch.stack([projection] * 3, dim=-1)
-            output = output.permute(0, 3, 1, 2)
-            ##if self.res_next.training:
-            ##    output = self.data_transforms(output)
+            output = output.permute(2, 0, 1)
+            if self.res_next.training:
+                output = self.data_transforms(output)
+            output = output.unsqueeze(0)
+            output = output.to(self.device)
 
             # Extract features
             output = self.res_next.conv1(output)
