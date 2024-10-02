@@ -16,13 +16,13 @@ class BaseResNeXt50(nn.Module):
         transforms.ToPILImage(),
         transforms.RandomApply([
             transforms.RandomOrder([
-                transforms.RandomAffine(degrees=15, translate=(0.3, 0.3), scale=(0.8, 1.2), fill=0),
-                transforms.RandomResizedCrop(size=input_dim, scale=(0.7, 1.0)),
+                transforms.RandomAffine(degrees=5, translate=(0.05, 0.05), scale=(0.95, 1.05), fill=0),
+                transforms.RandomResizedCrop(size=input_dim, scale=(0.9, 1.0)),
                 transforms.RandomHorizontalFlip(p=0.3),
-                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.3),
-                transforms.GaussianBlur(kernel_size=53, sigma=(5, 10)),
+                transforms.ColorJitter(brightness=0.01, contrast=0.01, saturation=0.01, hue=0.01),
+                transforms.GaussianBlur(kernel_size=5, sigma=(1, 1.5)),
             ]),
-        ], p=0.5),
+        ], p=0.3),
         transforms.ToTensor(),
     ])
 
@@ -60,13 +60,11 @@ class BaseResNeXt50(nn.Module):
     def forward(self, projections, projection_types):
         # Apply network
         output_list = []
-        for projection_type, projection in zip(projection_types, projections):
-            # Turn 2D image into 3D image
-            output = torch.stack([projection] * 3, dim=-1)
-            output = output.permute(2, 0, 1)
+        for i in range(projections.shape[1]):
+            # Turn 1-channel image into 3-channel image
+            output = torch.stack([projections[:, i, :, :]] * 3, dim=1)
             if self.res_next.training:
-                output = self.data_transforms(output)
-            output = output.unsqueeze(0)
+                output = torch.stack([self.data_transforms(output[i]) for i in range(output.shape[0])], dim=0)
             output = output.to(self.device)
 
             # Extract features
@@ -76,21 +74,24 @@ class BaseResNeXt50(nn.Module):
             output = self.res_next.layer3(output)
             output = self.res_next.layer4(output)
 
-            if projection_type == ProjectionType.AP:
-                layer_type = "ap"
-            else:
-                layer_type = "ll"
-            for i in range(len(self.conv_sizes) - 1):
-                output = self.__dict__[layer_type + "_layer_" + str(i)](output)
-                output = self.__dict__[layer_type + "_relu_" + str(i)](output)
+            ap_types_idx = [x == ProjectionType.AP for x in projection_types[:, i]]
+            ap_output = output[ap_types_idx]
+            ll_types_idx = [not x for x in ap_types_idx]
+            ll_output = output[ll_types_idx]
+            for j in range(len(self.conv_sizes) - 1):
+                ap_output = self.__dict__["ap_layer_" + str(j)](ap_output)
+                ap_output = self.__dict__["ap_relu_" + str(j)](ap_output)
+                ll_output = self.__dict__["ll_layer_" + str(j)](ll_output)
+                ll_output = self.__dict__["ll_relu_" + str(j)](ll_output)
+            output = torch.cat([ap_output, ll_output], dim=0)
 
             # GAP layer
             output = self.gap(output)
+            output = output.view(output.size(0), -1)
             output_list.append(output)
 
         # Join latent vectors
-        output = torch.mean(torch.cat(output_list, dim=0), dim=0, keepdim=True)
-        output = output.view(output.size(0), -1)
+        output = torch.mean(torch.stack(output_list, dim=0), dim=0)
         for i in range(len(self.fc_sizes)):
             output = self.__dict__["fc_" + str(i)](output)
             if i != len(self.fc_sizes) - 1:

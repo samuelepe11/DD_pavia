@@ -28,13 +28,13 @@ class StatsHolder:
              self.fpr) = extra_stats
         else:
             self.n_vals = 1
-            self.sens = tp / (tp + fn + self.eps)
-            self.spec = tn / (tn + fp + self.eps)
-            self.precis = tp / (tp + fp + self.eps)
-            self.neg_pred_val = tn / (tn + fn + self.eps)
-            self.f1 = 2 * self.sens * self.precis / (self.sens + self.precis + self.eps)
-            self.mcc = (tp * tn - fp * fn) / np.sqrt(np.float64(tp + fp) * (fn + tn) * (tp + fn) * (fp + tn) + self.eps)
-            self.fnr = fn / (tp + fn + self.eps)
-            self.fpr = fp / (tn + fp + self.eps)
+            self.sens = np.round(tp / (tp + fn + self.eps) + self.eps, 5)
+            self.spec = np.round(tn / (tn + fp + self.eps) + self.eps, 5)
+            self.precis = np.round(tp / (tp + fp + self.eps) + self.eps, 5)
+            self.neg_pred_val = np.round(tn / (tn + fn + self.eps) + self.eps, 5)
+            self.f1 = np.round(2 * self.sens * self.precis / (self.sens + self.precis + self.eps) + self.eps, 5)
+            self.mcc = np.round((tp * tn - fp * fn) / np.sqrt(np.float64(tp + fp) * (fn + tn) * (tp + fn) * (fp + tn) + self.eps) + self.eps, 5)
+            self.fnr = np.round(fn / (tp + fn + self.eps) + self.eps, 5)
+            self.fpr = np.round(fp / (tn + fp + self.eps) + self.eps, 5)
 
         self.calibration_results = None

@@ -1,5 +1,7 @@
 # Import packages
 import os
+
+import cv2
 import torch
 import torch.nn as nn
 import random
@@ -8,9 +10,11 @@ import time
 import pickle
 import matplotlib.pyplot as plt
 import optuna
+from torch.utils.data import DataLoader
 from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
+from functools import partial
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
 
 from DataUtils.XrayDataset import XrayDataset
@@ -57,20 +61,29 @@ class NetworkTrainer:
         self.start_time = None
         self.end_time = None
         self.train_losses = []
+        self.train_accuracies = []
         self.val_losses = []
+        self.val_accuracies = []
         self.val_eval_epochs = []
         self.optuna_study = None
 
         # Load datasets
         self.train_data = train_data
-        self.train_dim = len(self.train_data)
+        self.train_loader, self.train_dim = self.load_data(train_data, shuffle=True)
         self.val_data = val_data
-        self.val_dim = len(self.val_data)
+        self.val_loader, self.val_dim = self.load_data(val_data)
         self.test_data = test_data
-        self.test_dim = len(self.test_data)
+        self.test_loader, self.test_dim = self.load_data(test_data)
 
         # Initialize preprocessors
         self.preprocessor = Preprocessor(dataset=train_data, only_apply=True)
+
+    def load_data(self, data, shuffle=False):
+        dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle, num_workers=0,
+                                collate_fn=partial(NetworkTrainer.custom_collate_fn, img_dim=self.net.input_dim))
+        dim = len(data)
+
+        return dataloader, dim
 
     def train(self, show_epochs=False, trial_n=None, trial=None):
         if show_epochs:
@@ -81,40 +94,56 @@ class NetworkTrainer:
             self.criterion = self.criterion.cuda()
         net = self.net
 
-        '''if len(self.train_losses) == 0:
-            train_stats, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
-            self.train_losses.append(train_stats.loss)
+        if len(self.train_losses) == 0:
+            _, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
             self.val_losses.append(val_stats.loss)
-            self.val_eval_epochs.append(0)'''
+            self.val_accuracies.append(val_stats.acc)
+            self.val_eval_epochs.append(0)
 
         for epoch in range(self.epochs):
             net.set_training(True)
             train_loss = 0
-            random.shuffle(self.train_data.dicom_instances)
-            for instance in self.train_data:
-                loss, _, _ = self.apply_network(net, instance, set_type=SetType.TRAIN)
+            train_acc = 0
+            for batch in self.train_loader:
+                loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
                 train_loss += loss.item()
+                train_acc += acc.item()
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-            train_loss = train_loss / len(self.train_data)
+            train_loss = train_loss / len(self.train_loader)
+            train_acc = train_acc / len(self.train_loader)
             self.train_losses.append(train_loss)
+            self.train_accuracies.append(train_acc)
 
-            if epoch % self.val_epochs == 0:
+            if show_epochs and epoch % 10 == 0:
+                print("Epoch " + str(epoch + 1) + "/" + str(self.epochs) + " completed...")
+                print(" > train loss = " + str(np.round(train_loss, 5)))
+                print(" > train acc = " + str(np.round(train_acc * 100, 2)))
+
+            if epoch == 0 and show_epochs:
+                print(" > val loss = " + str(np.round(self.val_losses[-1], 5)))
+                print(" > val acc = " + str(np.round(self.val_accuracies[-1] * 100, 2)) + "%")
+            elif epoch % self.val_epochs == 0:
                 val_stats = self.test(set_type=SetType.VAL)
                 self.val_losses.append(val_stats.loss)
+                self.val_accuracies.append(val_stats.acc)
                 self.val_eval_epochs.append(epoch + 1)
+                if show_epochs:
+                    print(" > val loss = " + str(np.round(val_stats.loss, 5)))
+                    print(" > val acc = " + str(np.round(val_stats.acc * 100, 2)) + "%")
+
+                    # Update training curves
+                    plt.close()
+                    self.draw_training_curves()
+                    plt.show()
 
                 if trial is not None:
                     trial.report(val_stats.f1, epoch)
                     if trial.should_prune():
                         raise optuna.exceptions.TrialPruned()
-
-            if show_epochs and epoch % 10 == 0:
-                print("Epoch " + str(epoch + 1) + "/" + str(self.epochs) + " completed... train loss = " +
-                      str(np.round(train_loss, 5)))
 
             if epoch % self.val_epochs == 0 and len(self.val_losses) > self.convergence_patience:
                 # Check for convergence
@@ -138,46 +167,57 @@ class NetworkTrainer:
             return val_stats.f1
 
     def apply_network(self, net, instance, set_type):
-        y = int(instance[0][0][-1] != "")
-        y = torch.tensor([y]).to(torch.float32)
-        y = y.unsqueeze(0)
+        item, extra = instance
+        y = (item[-1] != "").astype(int)
+        y = torch.tensor(np.array(y)).to(torch.float32)
+        y = y.unsqueeze(1)
         y = y.to(self.device)
 
-        projection_types = []
-        projections = []
-        item, extra = instance
-        for projection_type, projection, _ in item:
-            projection_types.append(projection_type)
-            projections.append(projection)
+        projection_type_batch, projection_batch, _ = item
+        adjusted_projection = []
+        for i in range(projection_type_batch.shape[0]):
+            projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
+            projection_list = [x[0] for x in projection_list]
+            projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
+                                                            set_type=set_type)
+            temp = []
+            for j in range(len(projections)):
+                projection = projections[j]
+                projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
+                                                          show=False)
+                projection = np.resize(projection, (net.input_dim, net.input_dim))
+                projection = torch.tensor(projection, dtype=torch.float32)
+                temp.append(projection)
+            adjusted_projection.append(temp)
 
-        adjusted_projections = []
-        projections = self.preprocessor.mask_projection(projections, extra, set_type=set_type)
-        for i in range(len(projections)):
-            projection = projections[i]
-            projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0, show=False)
-
-            projection = np.resize(projection, (net.input_dim, net.input_dim))
-            projection = torch.tensor(projection, dtype=torch.float32)
-            adjusted_projections.append(projection)
-
-        # Train loss evaluation
-        output = net(adjusted_projections, projection_types)
+        # Loss evaluation
+        input = np.stack(adjusted_projection)
+        input = torch.from_numpy(input)
+        output = net(input, projection_type_batch)
         loss = self.criterion(output, y)
-        return loss, output, y
+
+        # Accuracy evaluation
+        pred = (output > 0.5).to(torch.int)
+        acc = torch.sum(pred == y) / y.shape[0]
+
+        return loss, output, y, acc
 
     def select_dataset(self, set_type):
         if set_type == SetType.TRAIN:
             dataset = self.train_data
+            loader = self.train_loader
             dim = self.train_dim
         elif set_type == SetType.VAL:
             dataset = self.val_data
+            loader = self.val_loader
             dim = self.val_dim
         else:
             # SetType.TEST
             dataset = self.test_data
+            loader = self.test_loader
             dim = self.test_dim
 
-        return dataset, dim
+        return dataset, loader, dim
 
     def compute_stats(self, y_true, y_pred, loss, acc, y_prob=None):
         n_vals = len(y_true)
@@ -210,7 +250,7 @@ class NetworkTrainer:
             self.criterion = self.criterion.cuda()
 
         net = self.net
-        dataset, dim = self.select_dataset(set_type)
+        _, loader, _ = self.select_dataset(set_type)
 
         # Store class labels
         y_prob = []
@@ -219,27 +259,25 @@ class NetworkTrainer:
         loss = 0
         net.set_training(False)
         with torch.no_grad():
-            for item in dataset:
-                temp_loss, output, y = self.apply_network(net, item, set_type=set_type)
+            for batch in loader:
+                temp_loss, output, y, _ = self.apply_network(net, batch, set_type=set_type)
                 loss += temp_loss.item()
 
                 # Accuracy evaluation
+                if output.shape[-1] == 1:
+                    output = torch.cat((1 - output, output), dim=-1)
                 prediction = torch.argmax(output, dim=1)
 
-                # Store values for Confusion Matrix calculation
-                if len(prediction) == 1:
-                    output = torch.tensor([1 - output, output])
-                y_prob.append(output)
-                y_true.append(y)
+                y_prob.append(output.cpu())
+                y_true.append(y.cpu())
+                y_pred.append(prediction.cpu())
 
-                y_pred.append(prediction)
+            y_prob = torch.cat(y_prob, dim=0)
+            y_true = torch.cat(y_true).squeeze(1).to(int)
+            y_pred = torch.cat(y_pred).to(int)
 
-            y_prob = torch.stack(y_prob, dim=0)
-            y_true = torch.concat(y_true).squeeze(1).to(int)
-            y_pred = torch.concat(y_pred).to(int)
-
-            loss /= dim
-            acc = torch.sum(y_true == y_pred) / dim
+            loss /= len(loader)
+            acc = torch.sum(y_true == y_pred) / len(y_true)
             acc = acc.item()
         stats_holder = self.compute_stats(y_true, y_pred, loss, acc)
 
@@ -253,6 +291,8 @@ class NetworkTrainer:
                                                                                     img_path)
 
         if assess_calibration:
+            if len(y_prob.shape) == 1:
+                y_prob = np.concatenate([y_prob, 1 - y_prob], axis=1)
             stats_holder.calibration_results = self.assess_calibration(y_true, y_prob, y_pred, set_type)
 
         return stats_holder
@@ -307,7 +347,7 @@ class NetworkTrainer:
         if assess_calibration:
             NetworkTrainer.show_calibration_table(train_stats, "training")
 
-        print("\n=======================================================================================================\n")
+        print()
         val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration)
         print("Validation loss = " + str(np.round(val_stats.loss, 5)) + " - Validation accuracy = " +
               str(np.round(val_stats.acc * 100, 7)) + "% - Validation F1-score = " +
@@ -318,7 +358,7 @@ class NetworkTrainer:
             NetworkTrainer.show_calibration_table(val_stats, "validation")
 
         if show_test:
-            print("\n=======================================================================================================\n")
+            print()
             test_stats = self.test(set_type=SetType.TEST, show_cm=show_cm, assess_calibration=assess_calibration)
             print("Test loss = " + str(np.round(test_stats.loss, 5)) + " - Test accuracy = " +
                   str(np.round(test_stats.acc * 100, 7)) + "% - Test F1-score = " +
@@ -329,13 +369,7 @@ class NetworkTrainer:
                 NetworkTrainer.show_calibration_table(test_stats, "test")
 
         if show_process or trial_n is not None:
-            plt.figure()
-            plt.plot(self.train_losses, "b", label="Training set")
-            plt.plot(self.val_eval_epochs, self.val_losses, "g", label="Validation set")
-            plt.legend()
-            plt.title("Training curves")
-            plt.ylabel("Loss")
-            plt.xlabel("Epoch")
+            self.draw_training_curves()
             if show_process:
                 plt.savefig(self.results_dir + "training_curves.jpg")
                 plt.close()
@@ -345,6 +379,27 @@ class NetworkTrainer:
 
         return train_stats, val_stats
 
+    def draw_training_curves(self):
+        plt.close()
+        plt.figure()
+        plt.suptitle("Training curves")
+
+        # Losses
+        plt.subplot(2, 1, 1)
+        plt.plot(self.train_losses, "b", label="Training set")
+        plt.plot(self.val_eval_epochs, self.val_losses, "g", label="Validation set")
+        plt.legend()
+        plt.ylabel("Loss")
+        plt.xlabel("Epoch")
+
+        # Accuracies
+        plt.subplot(2, 1, 2)
+        plt.plot(self.train_accuracies, "b", label="Training set")
+        plt.plot(self.val_eval_epochs, self.val_accuracies, "g", label="Validation set")
+        plt.legend()
+        plt.ylabel("Accuracy")
+        plt.xlabel("Epoch")
+
     def show_model(self):
         print("MODEL:")
         attributes = self.net.__dict__
@@ -352,6 +407,49 @@ class NetworkTrainer:
             val = attributes[attr]
             if issubclass(type(val), nn.Module):
                 print(" > " + attr, "-" * (20 - len(attr)), val)
+
+    @staticmethod
+    def custom_collate_fn(batch, img_dim):
+        segment_datas = []
+        pt_ids = []
+        segment_ids = []
+        for segment_data, extra_info in batch:
+            pt_id, segment_id = extra_info
+            segment_datas.append(segment_data)
+            pt_ids.append(pt_id)
+            segment_ids.append(segment_id)
+
+        # Resize images to the same dimension and patch channels in the batch
+        max_proj_num = np.max([len(x) for x in segment_datas])
+        segment_datas_patched = []
+        for segment_data in segment_datas:
+            temp = []
+            for proj in segment_data:
+                proj_id = proj[0]
+                img = proj[1]
+                descr = proj[2]
+                temp.append((proj_id, cv2.resize(img, (img_dim, img_dim)), descr))
+            extra_proj = max_proj_num - len(segment_data)
+            if extra_proj > 0:
+                for _ in range(extra_proj):
+                    temp.append((proj_id, np.zeros((img_dim, img_dim)), descr))
+            segment_datas_patched.append(temp)
+
+        batch_proj_id = []
+        batch_img = []
+        batch_descr = []
+        for segment_data in segment_datas_patched:
+            proj_id_list = []
+            img_list = []
+            for proj_data in segment_data:
+                proj_id_list.append(proj_data[0])
+                img_list.append(proj_data[1])
+            batch_proj_id.append(proj_id_list)
+            batch_img.append(np.stack(img_list))
+            batch_descr.append(segment_data[0][2])
+        segment_datas = (np.stack(batch_proj_id, dtype=object), np.stack(batch_img), np.stack(batch_descr, dtype=object))
+
+        return segment_datas, (pt_ids, segment_ids)
 
     @staticmethod
     def compute_binary_confusion_matrix(y_true, y_predicted, classes=None):
@@ -496,12 +594,12 @@ if __name__ == "__main__":
     working_dir1 = "./../../"
     model_name1 = "resnext50"
     net_type1 = NetType.RES_NEXT50
-    epochs1 = 1
+    epochs1 = 10
     trial_n1 = None
-    val_epochs1 = 10
+    val_epochs1 = 2
     use_cuda1 = True
     assess_calibration1 = True
-    show_test1 = True
+    show_test1 = False
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
@@ -509,8 +607,8 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    net_params1 = {"n_conv_neurons": 2048, "n_conv_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr": 0.01}
+    net_params1 = {"n_conv_neurons": 1024, "n_conv_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
+                   "lr": 0.01, "batch_size": 4}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, net_params=net_params1,  use_cuda=use_cuda1)

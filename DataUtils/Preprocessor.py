@@ -239,20 +239,22 @@ class Preprocessor:
 
     def mask_projection(self, projections, extra_info, set_type):
         pt_id, segm_id = extra_info
-        instance_name = f"{pt_id:03d}" + segm_id
+        instance_name = f"{pt_id:03d}" + segm_id.lower()
 
         folder = self.segmentation_dir + set_type.value + "/" + instance_name
         masked_projections = []
         for i in range(len(projections)):
-            try:
-                projection = projections[i]
-                mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
-                mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
-                masked_projections.append(np.multiply(projection, mask / 255))
-            except cv2.error:
-                print("Absent preprocessing mask for projection " + str(i) + " of " + instance_name)
+            projection = projections[i]
+            if not len(np.unique(projection)) == 1:
+                try:
+                    mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
+                    mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
+                    masked_projections.append(np.multiply(projection, mask / 255))
+                except cv2.error:
+                    print("Absent preprocessing mask for projection " + str(i) + " of " + instance_name)
+                    masked_projections.append(projection)
+            else:
                 masked_projections.append(projection)
-
         return masked_projections
 
     @staticmethod
