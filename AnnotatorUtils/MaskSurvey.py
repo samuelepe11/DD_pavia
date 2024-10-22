@@ -12,6 +12,7 @@ from datetime import datetime
 from DataUtils.XrayDataset import XrayDataset
 from DataUtils.PatientInstance import PatientInstance
 from Enumerators.ProjectionType import ProjectionType
+from TrainUtils.NetworkTrainer import NetworkTrainer
 
 
 # Class
@@ -24,9 +25,12 @@ class MaskSurvey:
     avoid_interaction = gr.update(interactive=False)
     normal_scale_value = 1
 
-    def __init__(self, dataset, desired_instances, blur=False):
+    def __init__(self, dataset, desired_instances, blur=False, dataset_name=None):
+        self.users = None
         self.dataset = dataset
-        self.mask_dir = dataset.data_dir + MaskSurvey.mask_fold
+        if dataset_name is not None:
+            self.mask_fold = dataset_name + "_" + self.mask_fold
+        self.mask_dir = dataset.data_dir + self.mask_fold
         self.max_projection_number = dataset.max_projection_number()
 
         self.desired_instances = desired_instances
@@ -360,11 +364,14 @@ class MaskSurvey:
     def check_collected_masks(self, round_precision=2):
         # Collect classification outcome
         print("-------------------------------------------------------------------------------------------------------")
-        users = [x for x in os.listdir(self.mask_dir) if ".csv" not in x]
-        col_names = ["Fracture position"] + users
+        self.users = [x for x in os.listdir(self.mask_dir) if "." not in x]
+        col_names = ["Item name", "Fracture position"] + self.users
         all_labels = []
-        acc = [0] * len(users)
-        user_accuracies = dict(zip(users, acc))
+        acc = [0] * len(self.users)
+        user_tp = dict(zip(self.users, acc))
+        user_tn = dict(zip(self.users, acc))
+        user_fp = dict(zip(self.users, acc))
+        user_fn = dict(zip(self.users, acc))
         and_accuracy = 0
         or_accuracy = 0
         majority_accuracy = 0
@@ -372,29 +379,45 @@ class MaskSurvey:
         for i in range(n_instances):
             item_name = self.desired_instances[i]
             instance, _ = self.dataset.__getitem__(i)
-            labels = [instance[0][-1]]
-            for user in users:
+            labels = [item_name, instance[0][-1]]
+            true_label = int(labels[1] != "")
+            for user in self.users:
                 user_label = int(len(os.listdir(self.mask_dir + "/" + user + "/" + item_name)) > 0)
                 labels.append(user_label)
-                if user_label == int(labels[0] != ""):
-                    user_accuracies[user] += 1
+                if true_label:
+                    if user_label:
+                        user_tp[user] += 1
+                    else:
+                        user_fn[user] += 1
+                else:
+                    if user_label:
+                        user_fp[user] += 1
+                    else:
+                        user_tn[user] += 1
+
             all_labels.append(labels)
 
-            user_labels = np.array(labels[1:])
-            gt_label = np.array(int(labels[0] != ""))
+            user_labels = np.array(labels[2:])
+            gt_label = np.array(true_label)
             if np.all(user_labels == gt_label):
                 and_accuracy += 1
             if np.any(user_labels == gt_label):
                 or_accuracy += 1
-            if np.sum(user_labels == gt_label) >= len(users) / 2:
+            if np.sum(user_labels == gt_label) >= len(self.users) / 2:
                 majority_accuracy += 1
         df = pd.DataFrame(all_labels, columns=col_names)
         df.to_csv(self.mask_dir + "classification_results.csv", index=False)
 
         # Normalize accuracies
-        user_accuracies = {k: MaskSurvey.normalize_acc(x, n_instances) for k, x in user_accuracies.items()}
-        for k in user_accuracies.keys():
-            print("Accuracy for " + k + ": " + str(user_accuracies[k]) + "%")
+        user_accuracies = {user: MaskSurvey.normalize_acc(user_tp[user] + user_tn[user], n_instances) for user in
+                           self.users}
+        for user in self.users:
+            print("Accuracy for " + user + ": " + str(user_accuracies[user]) + "%")
+
+            # Draw confusion matrices
+            cm = [[user_tp[user], user_fp[user]], [user_fn[user], user_tn[user]]]
+            filename = user.replace(" ", "_").lower()
+            NetworkTrainer.draw_multiclass_confusion_matrix(cm, XrayDataset.classes, self.mask_dir + filename + "_cm.jpg")
         print()
         and_accuracy = MaskSurvey.normalize_acc(and_accuracy, n_instances)
         print("Accuracy if every user is correct: " + str(and_accuracy) + "%")
@@ -405,7 +428,7 @@ class MaskSurvey:
 
         # Check mask-projection correspondence
         print("-------------------------------------------------------------------------------------------------------")
-        for user in users:
+        for user in self.users:
             print("Correspondence check for " + user + "...")
             for i in range(n_instances):
                 instance, _ = self.dataset.__getitem__(i)
@@ -487,7 +510,8 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Launch app
-    survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, blur=blur1)
+    survey = MaskSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, blur=blur1,
+                        dataset_name=dataset_name1)
     print("Add '?__theme=dark' at the end of the link")
     # survey.build_app()
 

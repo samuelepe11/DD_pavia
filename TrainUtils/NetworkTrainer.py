@@ -118,7 +118,8 @@ class NetworkTrainer:
             self.train_losses.append(train_loss)
             self.train_accuracies.append(train_acc)
 
-            if show_epochs and epoch % 10 == 0:
+            if show_epochs and (epoch % 10 == 0 or epoch % self.val_epochs == 0):
+                print()
                 print("Epoch " + str(epoch + 1) + "/" + str(self.epochs) + " completed...")
                 print(" > train loss = " + str(np.round(train_loss, 5)))
                 print(" > train acc = " + str(np.round(train_acc * 100, 2)))
@@ -130,7 +131,7 @@ class NetworkTrainer:
                 val_stats = self.test(set_type=SetType.VAL)
                 self.val_losses.append(val_stats.loss)
                 self.val_accuracies.append(val_stats.acc)
-                self.val_eval_epochs.append(epoch + 1)
+                self.val_eval_epochs.append(epoch)
                 if show_epochs:
                     print(" > val loss = " + str(np.round(val_stats.loss, 5)))
                     print(" > val acc = " + str(np.round(val_stats.acc * 100, 2)) + "%")
@@ -381,7 +382,7 @@ class NetworkTrainer:
 
     def draw_training_curves(self):
         plt.close()
-        plt.figure()
+        plt.figure(figsize=(10, 10))
         plt.suptitle("Training curves")
 
         # Losses
@@ -510,7 +511,11 @@ class NetworkTrainer:
     @staticmethod
     def draw_multiclass_confusion_matrix(cm, labels, img_path):
         plt.figure(figsize=(2, 2))
-        cm = cm.cpu()
+        try:
+            cm = cm.cpu()
+        except AttributeError:
+            # For the use of this method in MaskSurvey
+            cm = np.array(cm)
         plt.imshow(cm, cmap="Reds")
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):

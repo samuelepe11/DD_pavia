@@ -319,6 +319,10 @@ class XrayDataset(Dataset):
 
         return np.max(projection_numbers)
 
+    def get_data_from_name(self, name):
+        ind = self.dicom_instances.index(name)
+        return self.__getitem__(ind)
+
     @staticmethod
     def load_dataset(working_dir, dataset_name, set_type=None):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
