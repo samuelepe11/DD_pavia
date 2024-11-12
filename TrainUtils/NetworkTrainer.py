@@ -21,7 +21,8 @@ from DataUtils.XrayDataset import XrayDataset
 from DataUtils.Preprocessor import Preprocessor
 from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
-from Networks.BaseResNeXt50 import BaseResNeXt50
+from Networks.BaseResNeXt import BaseResNeXt
+from Networks.BaseResNeXt101 import BaseResNeXt101
 from TrainUtils.StatsHolder import StatsHolder
 
 
@@ -29,7 +30,8 @@ from TrainUtils.StatsHolder import StatsHolder
 class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
-                 convergence_patience=3, convergence_thresh=1e-3, net_params=None, use_cuda=True):
+                 convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
+                 use_cuda=True):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -44,7 +46,9 @@ class NetworkTrainer:
         self.net_type = net_type
         self.net_params = net_params
         if net_type == NetType.RES_NEXT50:
-            self.net = BaseResNeXt50(params=net_params, device=self.device)
+            self.net = BaseResNeXt(params=net_params, device=self.device)
+        elif net_type == NetType.RES_NEXT101:
+            self.net = BaseResNeXt101(params=net_params, device=self.device)
         else:
             self.net = None
             print("Selected network is not avalable")
@@ -54,9 +58,13 @@ class NetworkTrainer:
         self.epochs = epochs
         self.val_epochs = val_epochs
         self.criterion = nn.BCELoss()
-        self.optimizer = getattr(torch.optim, net_params["optimizer"])(self.net.parameters(), lr=self.net_params["lr"])
+        param_groups = [{"params": self.net.res_next.layer4.parameters(), "lr": self.net_params["lr_second_last"]},
+                        {"params":  [param for name, param in self.net.named_parameters() if "layer4" not in name],
+                         "lr": self.net_params["lr_last"]}]
+        self.optimizer = getattr(torch.optim, net_params["optimizer"])(param_groups)
         self.convergence_thresh = convergence_thresh
         self.convergence_patience = convergence_patience
+        self.preprocess_inputs = preprocess_inputs
 
         self.start_time = None
         self.end_time = None
@@ -180,7 +188,7 @@ class NetworkTrainer:
             projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
             projection_list = [x[0] for x in projection_list]
             projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
-                                                            set_type=set_type)
+                                                            set_type=set_type, preprocess=self.preprocess_inputs)
             temp = []
             for j in range(len(projections)):
                 projection = projections[j]
@@ -597,11 +605,12 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext50"
-    net_type1 = NetType.RES_NEXT50
-    epochs1 = 10
+    model_name1 = "resnext101"
+    net_type1 = NetType.RES_NEXT101
+    epochs1 = 100
+    preprocess_inputs1 = True
     trial_n1 = None
-    val_epochs1 = 2
+    val_epochs1 = 5
     use_cuda1 = True
     assess_calibration1 = True
     show_test1 = False
@@ -612,11 +621,12 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    net_params1 = {"n_conv_neurons": 1024, "n_conv_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr": 0.01, "batch_size": 4}
+    net_params1 = {"n_conv_neurons": 2048, "n_conv_layers": 2, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
+                   "lr_last": 0.01, "lr_second_last": 0.001, "batch_size": 4}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
-                              val_epochs=val_epochs1, net_params=net_params1,  use_cuda=use_cuda1)
+                              val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
+                              use_cuda=use_cuda1)
 
     # Train model
     print()

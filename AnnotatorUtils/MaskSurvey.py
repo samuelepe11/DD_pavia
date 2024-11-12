@@ -13,6 +13,7 @@ from DataUtils.XrayDataset import XrayDataset
 from DataUtils.PatientInstance import PatientInstance
 from Enumerators.ProjectionType import ProjectionType
 from TrainUtils.NetworkTrainer import NetworkTrainer
+from AnnotateMasks import AnnotateMasks
 
 
 # Class
@@ -364,7 +365,8 @@ class MaskSurvey:
     def check_collected_masks(self, round_precision=2):
         # Collect classification outcome
         print("-------------------------------------------------------------------------------------------------------")
-        self.users = [x for x in os.listdir(self.mask_dir) if "." not in x]
+        self.users = [x for x in os.listdir(self.mask_dir) if "." not in x and x not in AnnotateMasks.annotator_labels
+                      and AnnotateMasks.result_folder not in x]
         col_names = ["Item name", "Fracture position"] + self.users
         all_labels = []
         acc = [0] * len(self.users)
@@ -420,11 +422,11 @@ class MaskSurvey:
             NetworkTrainer.draw_multiclass_confusion_matrix(cm, XrayDataset.classes, self.mask_dir + filename + "_cm.jpg")
         print()
         and_accuracy = MaskSurvey.normalize_acc(and_accuracy, n_instances)
-        print("Accuracy if every user is correct: " + str(and_accuracy) + "%")
+        print("Accuracy if every user is right: " + str(and_accuracy) + "%")
         or_accuracy = MaskSurvey.normalize_acc(or_accuracy, n_instances)
-        print("Accuracy if at least one user is correct: " + str(or_accuracy) + "%")
+        print("Accuracy if at least one user is right: " + str(or_accuracy) + "%")
         majority_accuracy = MaskSurvey.normalize_acc(majority_accuracy, n_instances)
-        print("Accuracy if the majority of users are correct: " + str(majority_accuracy) + "%")
+        print("Accuracy if the majority of users are right: " + str(majority_accuracy) + "%")
 
         # Check mask-projection correspondence
         print("-------------------------------------------------------------------------------------------------------")

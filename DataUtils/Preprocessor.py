@@ -237,7 +237,7 @@ class Preprocessor:
             plt.close()
         return mask
 
-    def mask_projection(self, projections, extra_info, set_type):
+    def mask_projection(self, projections, extra_info, set_type, preprocess=False):
         pt_id, segm_id = extra_info
         instance_name = f"{pt_id:03d}" + segm_id.lower()
 
@@ -247,6 +247,9 @@ class Preprocessor:
             projection = projections[i]
             if not len(np.unique(projection)) == 1:
                 try:
+                    if preprocess:
+                        projection = self.preprocess(img=projection, segm=segm_id, downsampling_iterates=None,
+                                                     show=False)
                     mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
                     mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
                     masked_projections.append(np.multiply(projection, mask / 255))

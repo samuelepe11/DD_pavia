@@ -7,13 +7,14 @@ import numpy as np
 import cv2
 import pandas as pd
 import SimpleITK as sitk
+import seaborn as sns
 from statsmodels.stats import inter_rater as ir
 
 from DataUtils.XrayDataset import XrayDataset
 
 
 # Class
-class AnnotatedMasks:
+class AnnotateMasks:
     result_folder = "gt_masks"
     annotator_labels = ["s1", "j1", "s2", "j2"]
 
@@ -110,6 +111,14 @@ class AnnotatedMasks:
 
         df = pd.DataFrame(cols, columns=col_names)
         df.to_csv(self.mask_dir + "mask_count.csv", index=False)
+
+        # Save result as a confusion matrix
+        df.set_index("Item name", inplace=True)
+        plt.figure(figsize=(5, 20))
+        sns.heatmap(df, annot=True, cmap="Reds", cbar=False)
+        plt.xlabel("ANNOTATOR")
+        plt.ylabel("ITEM")
+        plt.savefig(self.mask_dir + "mask_count.png", format="png", dpi=500)
 
     def build_gt_mask(self, instance_name=None, annotator_type=None):
         self.sens, self.spec = [], []
@@ -370,7 +379,7 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Define annotator
-    annotator1 = AnnotatedMasks(dataset=dataset1, desired_instances=dataset1.dicom_instances, mask_folder=mask_folder1)
+    annotator1 = AnnotateMasks(dataset=dataset1, desired_instances=dataset1.dicom_instances, mask_folder=mask_folder1)
 
     # Preprocess masks
     instance_names1 = ["320l", "356s", "418l"]
@@ -379,7 +388,7 @@ if __name__ == "__main__":
     #     annotator1.preprocess_masks(instance_name=instance_name1)
 
     # Count masks
-    # annotator1.count_masks()
+    annotator1.count_masks()
 
     # Compare all annotators' performances
     # annotator1.compare_all_annotators(instance_names=instance_names1)
@@ -390,9 +399,9 @@ if __name__ == "__main__":
     #    annotator1.build_gt_mask(instance_name=instance_name1, annotator_type=annotator_type1)
 
     # Compare senior and junior annotators' performances
-    annotator1.compare_binary_subgroups(instance_names=instance_names1, binary_subgroup=["s1", "s2"])
+    # annotator1.compare_binary_subgroups(instance_names=instance_names1, binary_subgroup=["s1", "s2"])
     print("=================================================================")
-    annotator1.compare_binary_subgroups(instance_names=instance_names1, binary_subgroup=["j1", "j2"])
+    # annotator1.compare_binary_subgroups(instance_names=instance_names1, binary_subgroup=["j1", "j2"])
     print("=================================================================")
-    annotator1.compare_binary_subgroups(instance_names=instance_names1)
+    # annotator1.compare_binary_subgroups(instance_names=instance_names1)
 
