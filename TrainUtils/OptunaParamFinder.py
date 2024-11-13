@@ -1,4 +1,5 @@
 # Import packages
+import matplotlib.pyplot as plt
 import optuna
 import numpy as np
 import torch
@@ -35,13 +36,13 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         params = {
-            "n_conv_neurons": int(2 ** (trial.suggest_int("n_conv_neurons", 8, 12, step=1))),
-            "n_conv_layers": int(trial.suggest_int("n_conv_layers", 1, 3, step=1)),
-            "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
+            "n_conv_neurons": int(2 ** (trial.suggest_int("n_conv_neurons", 8, 10, step=1))),
+            "n_conv_layers": int(trial.suggest_int("n_conv_layers", 1, 2, step=1)),
+            "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 2, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 3, step=1)), 3),
-            "lr_second_last": np.round(10 ** (-1 * trial.suggest_int("lr_second_last", 2, 4, step=1)), 3),
+            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 5, 15, step=5),
             "batch_size": trial.suggest_int("batch_size", 4, 8, step=2)
         }
 
@@ -81,11 +82,12 @@ class OptunaParamFinder:
 if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext101_optuna"
-    net_type1 = NetType.RES_NEXT101
-    epochs1 = 10
-    val_epochs1 = 2
-    use_cuda1 = True
+    # working_dir1 = "s3://dd-pavia-dev-resources/"
+    model_name1 = "resnext50_optuna"
+    net_type1 = NetType.RES_NEXT50
+    epochs1 = 1
+    val_epochs1 = 1
+    use_cuda1 = False
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
@@ -93,7 +95,7 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define Optuna model
-    n_trials1 = 5
+    n_trials1 = 1
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1)

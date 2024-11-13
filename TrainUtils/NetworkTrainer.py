@@ -7,7 +7,6 @@ import torch.nn as nn
 import random
 import numpy as np
 import time
-import pickle
 import matplotlib.pyplot as plt
 import optuna
 from torch.utils.data import DataLoader
@@ -30,7 +29,7 @@ from TrainUtils.StatsHolder import StatsHolder
 class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
-                 convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
+                 convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True):
         # Initialize attributes
         self.model_name = model_name
@@ -58,7 +57,8 @@ class NetworkTrainer:
         self.epochs = epochs
         self.val_epochs = val_epochs
         self.criterion = nn.BCELoss()
-        param_groups = [{"params": self.net.res_next.layer4.parameters(), "lr": self.net_params["lr_second_last"]},
+        param_groups = [{"params": self.net.res_next.layer4.parameters(),
+                         "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
                         {"params":  [param for name, param in self.net.named_parameters() if "layer4" not in name],
                          "lr": self.net_params["lr_last"]}]
         self.optimizer = getattr(torch.optim, net_params["optimizer"])(param_groups)
@@ -75,16 +75,17 @@ class NetworkTrainer:
         self.val_eval_epochs = []
         self.optuna_study = None
 
-        # Load datasets
         self.train_data = train_data
-        self.train_loader, self.train_dim = self.load_data(train_data, shuffle=True)
         self.val_data = val_data
-        self.val_loader, self.val_dim = self.load_data(val_data)
         self.test_data = test_data
-        self.test_loader, self.test_dim = self.load_data(test_data)
+        if train_data is not None:
+            # Load datasets
+            self.train_loader, self.train_dim = self.load_data(train_data, shuffle=True)
+            self.val_loader, self.val_dim = self.load_data(val_data)
+            self.test_loader, self.test_dim = self.load_data(test_data)
 
-        # Initialize preprocessors
-        self.preprocessor = Preprocessor(dataset=train_data, only_apply=True)
+            # Initialize preprocessors
+            self.preprocessor = Preprocessor(dataset=train_data, only_apply=True)
 
     def load_data(self, data, shuffle=False):
         dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle, num_workers=0,
@@ -102,12 +103,12 @@ class NetworkTrainer:
             self.criterion = self.criterion.cuda()
         net = self.net
 
-        if len(self.train_losses) == 0:
+        if len(self.train_losses) == 0 and trial is None:
+            print("\nPerforming initial evaluation...")
             _, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
-            self.val_losses.append(val_stats.loss)
-            self.val_accuracies.append(val_stats.acc)
-            self.val_eval_epochs.append(0)
 
+        if show_epochs:
+            print("\nStarting the training phase...")
         for epoch in range(self.epochs):
             net.set_training(True)
             train_loss = 0
@@ -132,10 +133,7 @@ class NetworkTrainer:
                 print(" > train loss = " + str(np.round(train_loss, 5)))
                 print(" > train acc = " + str(np.round(train_acc * 100, 2)))
 
-            if epoch == 0 and show_epochs:
-                print(" > val loss = " + str(np.round(self.val_losses[-1], 5)))
-                print(" > val acc = " + str(np.round(self.val_accuracies[-1] * 100, 2)) + "%")
-            elif epoch % self.val_epochs == 0:
+            if epoch % self.val_epochs == 0:
                 val_stats = self.test(set_type=SetType.VAL)
                 self.val_losses.append(val_stats.loss)
                 self.val_accuracies.append(val_stats.acc)
@@ -145,9 +143,10 @@ class NetworkTrainer:
                     print(" > val acc = " + str(np.round(val_stats.acc * 100, 2)) + "%")
 
                     # Update training curves
-                    plt.close()
-                    self.draw_training_curves()
-                    plt.show()
+                    if epoch != 0:
+                        plt.close()
+                        self.draw_training_curves()
+                        plt.show()
 
                 if trial is not None:
                     trial.report(val_stats.f1, epoch)
@@ -212,6 +211,20 @@ class NetworkTrainer:
         return loss, output, y, acc
 
     def select_dataset(self, set_type):
+        if self.train_data is None:
+            # Read datasets
+            self.train_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
+            self.val_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation")
+            self.test_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
+
+            # Load datasets
+            self.train_loader, self.train_dim = self.load_data(self.train_data, shuffle=True)
+            self.val_loader, self.val_dim = self.load_data(self.val_data)
+            self.test_loader, self.test_dim = self.load_data(self.test_data)
+
+            # Initialize preprocessors
+            self.preprocessor = Preprocessor(dataset=self.train_data, only_apply=True)
+
         if set_type == SetType.TRAIN:
             dataset = self.train_data
             loader = self.train_loader
@@ -338,11 +351,13 @@ class NetworkTrainer:
         else:
             addon = "trial_" + str(trial_n - 1)
         file_path = self.results_dir + addon + ".pt"
-        with open(file_path, "wb") as file:
-            pickle.dump(self, file)
-            print("'" + self.model_name + "' has been successfully saved!... train loss: " +
-                  str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1],
-                                                                                 4)))
+        torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
+                    "preprocess_inputs": self.preprocess_inputs, "net_params": self.net_params,
+                    "model_state_dict": self.net.state_dict()}, file_path)
+
+        print("'" + self.model_name + "' has been successfully saved!... train loss: " +
+              str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
+        print()
 
     def summarize_performance(self, show_test=False, show_process=False, show_cm=False, trial_n=None,
                               assess_calibration=False):
@@ -544,11 +559,12 @@ class NetworkTrainer:
             file_name = "trial_" + str(trial_n)
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
                     file_name + ".pt")
-        with open(filepath, "rb") as file:
-            network_trainer = pickle.load(file)
-
-        network_trainer.use_cuda = torch.cuda.is_available() and use_cuda
-        network_trainer.device = torch.device("cuda" if network_trainer.use_cuda else "cpu")
+        checkpoint = torch.load(filepath)
+        network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=None,
+                                         val_data=None, test_data=None, net_type=checkpoint["net_type"],
+                                         epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
+                                         preprocess_inputs=checkpoint["preprocess_inputs"],
+                                         net_params=checkpoint["net_params"], use_cuda=use_cuda)
 
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
@@ -605,12 +621,13 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext101"
-    net_type1 = NetType.RES_NEXT101
-    epochs1 = 100
+    # working_dir1 = "s3://dd-pavia-dev-resources/"
+    model_name1 = "resnext50"
+    net_type1 = NetType.RES_NEXT50
+    epochs1 = 1
     preprocess_inputs1 = True
     trial_n1 = None
-    val_epochs1 = 5
+    val_epochs1 = 1
     use_cuda1 = True
     assess_calibration1 = True
     show_test1 = False
@@ -621,19 +638,18 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    net_params1 = {"n_conv_neurons": 2048, "n_conv_layers": 2, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.01, "lr_second_last": 0.001, "batch_size": 4}
+    net_params1 = {"n_conv_neurons": 1024, "n_conv_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
+                   "lr_last": 0.01, "lr_second_last_factor": 10, "batch_size": 4}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
                               use_cuda=use_cuda1)
 
     # Train model
-    print()
     trainer1.train(show_epochs=True)
+    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)
     
     # Evaluate model
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
                                          use_cuda=use_cuda1)
-    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
