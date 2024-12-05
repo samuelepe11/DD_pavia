@@ -22,10 +22,11 @@ class Preprocessor:
     # Define class attributes
     segmentation_fold = "segmentation_results/"
 
-    def __init__(self, dataset, only_apply=False):
+    def __init__(self, dataset, only_apply=False, s3=None):
         self.dataset = dataset
+        self.s3 = s3
         self.segmentation_dir = dataset.results_dir + Preprocessor.segmentation_fold
-
+        
         # Load MedSAM model
         if torch.cuda.is_available():
             self.device = "cuda"
@@ -91,8 +92,11 @@ class Preprocessor:
                     self.temp_path += "/pt" + str(pt_ind) + "_segm" + str(segm_ind) + "_proj" + str(proj_id) + "__"
                 else:
                     self.temp_path += temp_path_addon
-                plt.savefig(self.temp_path + "preprocess.png", format="png", bbox_inches="tight", pad_inches=0,
-                            dpi=300)
+                    
+                filepath = self.temp_path + "preprocess.png"
+                if self.s3 is not None:
+                    filepath = self.s3.open(filepath, "wb")
+                plt.savefig(filepath, format="png", bbox_inches="tight", pad_inches=0, dpi=300)
                 plt.close()
         return img
 
@@ -250,10 +254,16 @@ class Preprocessor:
                     if preprocess:
                         projection = self.preprocess(img=projection, segm=segm_id, downsampling_iterates=None,
                                                      show=False)
-                    mask = cv2.imread(folder + "/projection" + str(i) + ".png", cv2.IMREAD_GRAYSCALE)
+                    filepath = folder + "/projection" + str(i) + ".png"
+                    if self.s3 is not None:
+                        filepath = self.s3.open(filepath, "rb")
+                        mask = plt.imread(filepath) * 255
+                        mask = mask[:, :, 0]
+                    else:
+                        mask = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
                     mask = cv2.resize(mask, (projection.shape[1], projection.shape[0]))
                     masked_projections.append(np.multiply(projection, mask / 255))
-                except cv2.error:
+                except (cv2.error, FileNotFoundError):
                     print("Absent preprocessing mask for projection " + str(i) + " of " + instance_name)
                     masked_projections.append(projection)
             else:

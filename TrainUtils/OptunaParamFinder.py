@@ -13,7 +13,7 @@ from Enumerators.NetType import NetType
 class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
-                 n_trials):
+                 n_trials, s3=None):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -30,20 +30,21 @@ class OptunaParamFinder:
         self.n_trials = n_trials
 
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/"
+        self.s3 = s3
 
     def initialize_study(self):
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials)
 
     def objective(self, trial):
         params = {
-            "n_conv_neurons": int(2 ** (trial.suggest_int("n_conv_neurons", 8, 10, step=1))),
-            "n_conv_layers": int(trial.suggest_int("n_conv_layers", 1, 2, step=1)),
+            "n_conv_neurons": int(2 ** (trial.suggest_int("n_conv_neurons", 9, 11, step=1))),
+            "n_conv_layers": int(trial.suggest_int("n_conv_layers", 1, 3, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 2, step=1)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 3, step=1)), 3),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 5, 15, step=5),
-            "batch_size": trial.suggest_int("batch_size", 4, 8, step=2)
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1)))
         }
 
         # Define seeds
@@ -56,7 +57,7 @@ class OptunaParamFinder:
             trainer = NetworkTrainer(model_name=self.model_name, working_dir=self.working_dir,
                                      train_data=self.train_data, val_data=self.val_data, test_data=self.test_data,
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
-                                     net_params=params, use_cuda=self.use_cuda)
+                                     net_params=params, use_cuda=self.use_cuda, s3=self.s3)
             val_f1 = trainer.train(show_epochs=False, trial_n=self.counter, trial=trial)
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -70,19 +71,36 @@ class OptunaParamFinder:
             print("{}: {}".format(key, value))
 
         fig = optuna.visualization.plot_intermediate_values(self.study)
-        fig.savefig(self.results_dir + "plot_intermediate_values.jpg", format="jpg", dpi=300)
+        imgpath = self.results_dir + "plot_intermediate_values.jpg"
+        if self.s3 is not None:
+            imgpath = self.s3.open(imgpath, "wb")
+        fig.write_image(imgpath, format="jpg")
+        
         fig = optuna.visualization.plot_optimization_history(self.study)
-        fig.savefig(self.results_dir + "plot_optimization_history.jpg", format="jpg", dpi=300)
+        imgpath = self.results_dir + "plot_optimization_history.jpg"
+        if self.s3 is not None:
+            imgpath = self.s3.open(imgpath, "wb")
+        fig.write_image(imgpath, format="jpg")
+        
         fig = optuna.visualization.plot_parallel_coordinate(self.study)
-        fig.savefig(self.results_dir + "plot_parallel_coordinate.jpg", format="jpg", dpi=300)
-        fig = optuna.visualization.plot_param_importances(self.study)
-        fig.savefig(self.results_dir + "plot_param_importance.jpg", format="jpg", dpi=300)
+        imgpath = self.results_dir + "plot_parallel_coordinate.jpg"
+        if self.s3 is not None:
+            imgpath = self.s3.open(imgpath, "wb")
+        fig.write_image(imgpath, format="jpg")
+        
+        try:
+            fig = optuna.visualization.plot_param_importances(self.study)
+            imgpath = self.results_dir + "plot_param_importance.jpg"
+            if self.s3 is not None:
+                imgpath = self.s3.open(imgpath, "wb")
+            fig.write_image(imgpath, format="jpg")
+        except RuntimeError as e:
+            print("Unable to plot paraeter importance!", e)
 
 
 if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "s3://dd-pavia-dev-resources/"
     model_name1 = "resnext50_optuna"
     net_type1 = NetType.RES_NEXT50
     epochs1 = 1

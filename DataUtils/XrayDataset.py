@@ -324,10 +324,10 @@ class XrayDataset(Dataset):
         return self.__getitem__(ind)
 
     @staticmethod
-    def load_dataset(working_dir, dataset_name, set_type=None):
+    def load_dataset(working_dir, dataset_name, set_type=None, s3=None):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
-        with open(file_path, "rb") as file:
-            dataset = pickle.load(file)
+        file = open(file_path, "rb") if s3 is None else s3.open(file_path, "rb")
+        dataset = pickle.load(file)
         print("The dataset", dataset_name, "have been loaded!")
 
         # Correct mistakes in previously stored classes
@@ -385,6 +385,12 @@ class XrayDataset(Dataset):
         if set_type is not None:
             dataset.define_set_type(set_type)
             dataset.store_dataset(dataset_name=dataset_name + "_" + set_type.value)
+        
+        if s3 is not None:
+            dataset.working_dir = "s3://dd-s-matteo-dev-resources/"
+            dataset.data_dir = dataset.working_dir + dataset.data_fold
+            dataset.results_dir = dataset.working_dir + dataset.results_fold
+            dataset.preliminary_dir = dataset.results_dir + dataset.preliminary_fold
 
         return dataset
 

@@ -30,13 +30,18 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True):
+                 use_cuda=True, s3=None):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
-        if model_name not in os.listdir(self.results_dir):
-            os.mkdir(self.results_dir + model_name)
+        self.s3 = s3
+        if s3 is None:
+            if model_name not in os.listdir(self.results_dir):
+                os.mkdir(self.results_dir + model_name)
+        else:
+            if not s3.exists(self.results_dir + model_name):
+                s3.touch(self.results_dir + model_name + "/empty.txt")
         self.results_dir += model_name + "/"
 
         self.use_cuda = torch.cuda.is_available() and use_cuda
@@ -85,7 +90,7 @@ class NetworkTrainer:
             self.test_loader, self.test_dim = self.load_data(test_data)
 
             # Initialize preprocessors
-            self.preprocessor = Preprocessor(dataset=train_data, only_apply=True)
+            self.preprocessor = Preprocessor(dataset=train_data, only_apply=True, s3=s3)
 
     def load_data(self, data, shuffle=False):
         dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle, num_workers=0,
@@ -131,7 +136,7 @@ class NetworkTrainer:
                 print()
                 print("Epoch " + str(epoch + 1) + "/" + str(self.epochs) + " completed...")
                 print(" > train loss = " + str(np.round(train_loss, 5)))
-                print(" > train acc = " + str(np.round(train_acc * 100, 2)))
+                print(" > train acc = " + str(np.round(train_acc * 100, 2)) + "%")
 
             if epoch % self.val_epochs == 0:
                 val_stats = self.test(set_type=SetType.VAL)
@@ -213,9 +218,9 @@ class NetworkTrainer:
     def select_dataset(self, set_type):
         if self.train_data is None:
             # Read datasets
-            self.train_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
-            self.val_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation")
-            self.test_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
+            self.train_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training", s3=self.s3)
+            self.val_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation", s3=self.s3)
+            self.test_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test", s3=self.s3)
 
             # Load datasets
             self.train_loader, self.train_dim = self.load_data(self.train_data, shuffle=True)
@@ -223,7 +228,7 @@ class NetworkTrainer:
             self.test_loader, self.test_dim = self.load_data(self.test_data)
 
             # Initialize preprocessors
-            self.preprocessor = Preprocessor(dataset=self.train_data, only_apply=True)
+            self.preprocessor = Preprocessor(dataset=self.train_data, only_apply=True, s3=self.s3)
 
         if set_type == SetType.TRAIN:
             dataset = self.train_data
@@ -306,11 +311,13 @@ class NetworkTrainer:
         # Compute multiclass confusion matrix
         cm_name = set_type.value + "_cm"
         if show_cm:
-            img_path = self.results_dir + cm_name + ".jpg"
+            imgpath = self.results_dir + cm_name + ".jpg"
+            if self.s3 is not None:
+                imgpath = self.s3.open(imgpath, "wb")
         else:
-            img_path = None
+            imgpath = None
         self.__dict__[cm_name] = NetworkTrainer.compute_multiclass_confusion_matrix(y_true, y_pred, self.classes,
-                                                                                    img_path)
+                                                                                    imgpath)
 
         if assess_calibration:
             if len(y_prob.shape) == 1:
@@ -329,13 +336,19 @@ class NetworkTrainer:
         data = np.concatenate((y_true[:, np.newaxis], y_pred[:, np.newaxis], y_prob), axis=1)
         titles = ["y_true", "y_pred"] + ["y_prob" + str(i) for i in range(y_prob.shape[1])]
         df = DataFrame(data, columns=titles)
-        df.to_csv(self.results_dir + set_type.value + "_classification_results.csv", index=False)
+        filepath = self.results_dir + set_type.value + "_classification_results.csv"
+        if self.s3 is not None:
+            filepath = self.s3.open(filepath, "wb")
+        df.to_csv(filepath, index=False)
 
         # Draw reliability plot
         reliabilityplot(class_scores, strategy=10, split=False)
         plt.xlabel("Predicted probability")
         plt.ylabel("True probability")
-        plt.savefig(self.results_dir + set_type.value + "_calibration.png")
+        filepath = self.results_dir + set_type.value + "_calibration.png"
+        if self.s3 is not None:
+            filepath = self.s3.open(filepath, "wb")
+        plt.savefig(filepath)
         plt.close()
 
         # Compute local metrics
@@ -350,10 +363,13 @@ class NetworkTrainer:
             addon = self.model_name
         else:
             addon = "trial_" + str(trial_n - 1)
-        file_path = self.results_dir + addon + ".pt"
+            
+        filepath = self.results_dir + addon + ".pt"
+        if self.s3 is not None:
+            filepath = self.s3.open(filepath, "wb")
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": self.net_params,
-                    "model_state_dict": self.net.state_dict()}, file_path)
+                    "model_state_dict": self.net.state_dict()}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -365,7 +381,7 @@ class NetworkTrainer:
         train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
         print("Training loss = " + str(np.round(train_stats.loss, 5)) + " - Training accuracy = " +
               str(np.round(train_stats.acc * 100, 7)) + "% - Training F1-score = " +
-              str(np.round(train_stats.f1 * 100, 7)))
+              str(np.round(train_stats.f1 * 100, 7)) + "%")
 
         NetworkTrainer.show_performance_table(train_stats, "training")
         if assess_calibration:
@@ -395,10 +411,16 @@ class NetworkTrainer:
         if show_process or trial_n is not None:
             self.draw_training_curves()
             if show_process:
-                plt.savefig(self.results_dir + "training_curves.jpg")
+                filepath = self.results_dir + "training_curves.jpg"
+                if self.s3 is not None:
+                    filepath = self.s3.open(filepath, "wb")
+                plt.savefig(filepath)
                 plt.close()
             if trial_n is not None:
-                plt.savefig(self.results_dir + "trial_" + str(trial_n - 1) + "_curves.jpg")
+                filepath = self.results_dir + "trial_" + str(trial_n - 1) + "_curves.jpg"
+                if self.s3 is not None:
+                    filepath = self.s3.open(filepath, "wb")
+                plt.savefig(filepath)
                 plt.close()
 
         return train_stats, val_stats
@@ -521,18 +543,18 @@ class NetworkTrainer:
         return out
 
     @staticmethod
-    def compute_multiclass_confusion_matrix(y_true, y_pred, classes, img_path=None):
+    def compute_multiclass_confusion_matrix(y_true, y_pred, classes, imgpath=None):
         # Compute confusion matrix
         cm = multiclass_confusion_matrix(y_pred, y_true, len(classes))
 
         # Draw heatmap
-        if img_path is not None:
-            NetworkTrainer.draw_multiclass_confusion_matrix(cm, classes, img_path)
+        if imgpath is not None:
+            NetworkTrainer.draw_multiclass_confusion_matrix(cm, classes, imgpath)
 
         return cm
 
     @staticmethod
-    def draw_multiclass_confusion_matrix(cm, labels, img_path):
+    def draw_multiclass_confusion_matrix(cm, labels, imgpath, s3=None):
         plt.figure(figsize=(2, 2))
         try:
             cm = cm.cpu()
@@ -548,23 +570,26 @@ class NetworkTrainer:
         plt.xlabel("Predicted class")
         plt.yticks(range(len(labels)), labels, rotation=45)
         plt.ylabel("True class")
-        plt.savefig(img_path, dpi=300, bbox_inches="tight")
+
+        plt.savefig(imgpath, dpi=300, bbox_inches="tight")
         plt.close()
 
     @staticmethod
-    def load_model(working_dir, model_name, trial_n=None, use_cuda=True):
+    def load_model(working_dir, model_name, trial_n=None, use_cuda=True, s3=None):
         if trial_n is None:
             file_name = model_name
         else:
             file_name = "trial_" + str(trial_n)
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
                     file_name + ".pt")
+        if s3 is not None:
+            filepath = s3.open(filepath)
         checkpoint = torch.load(filepath)
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=None,
                                          val_data=None, test_data=None, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
-                                         net_params=checkpoint["net_params"], use_cuda=use_cuda)
+                                         net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3)
 
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
@@ -621,7 +646,6 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "s3://dd-pavia-dev-resources/"
     model_name1 = "resnext50"
     net_type1 = NetType.RES_NEXT50
     epochs1 = 1
