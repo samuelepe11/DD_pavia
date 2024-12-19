@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import optuna
 import numpy as np
 import torch
+import kaleido
 
 from DataUtils.XrayDataset import XrayDataset
 from TrainUtils.NetworkTrainer import NetworkTrainer
@@ -44,7 +45,7 @@ class OptunaParamFinder:
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 3, step=1)), 3),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 5, 15, step=5),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1)))
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1)))
         }
 
         # Define seeds

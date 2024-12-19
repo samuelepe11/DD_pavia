@@ -29,7 +29,7 @@ from TrainUtils.StatsHolder import StatsHolder
 class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
-                 convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
+                 convergence_patience=100, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True, s3=None):
         # Initialize attributes
         self.model_name = model_name
@@ -427,7 +427,7 @@ class NetworkTrainer:
 
     def draw_training_curves(self):
         plt.close()
-        plt.figure(figsize=(10, 10))
+        plt.figure(figsize=(5, 7))
         plt.suptitle("Training curves")
 
         # Losses
