@@ -20,7 +20,7 @@ from DataUtils.XrayDataset import XrayDataset
 from DataUtils.Preprocessor import Preprocessor
 from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
-from Networks.BaseResNeXt import BaseResNeXt
+from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
 from TrainUtils.StatsHolder import StatsHolder
 
@@ -29,7 +29,7 @@ from TrainUtils.StatsHolder import StatsHolder
 class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
-                 convergence_patience=100, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
+                 convergence_patience=10, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True, s3=None):
         # Initialize attributes
         self.model_name = model_name
@@ -50,21 +50,21 @@ class NetworkTrainer:
         self.net_type = net_type
         self.net_params = net_params
         if net_type == NetType.RES_NEXT50:
-            self.net = BaseResNeXt(params=net_params, device=self.device)
+            self.net = BaseResNeXt50(params=net_params, device=self.device)
         elif net_type == NetType.RES_NEXT101:
             self.net = BaseResNeXt101(params=net_params, device=self.device)
         else:
             self.net = None
-            print("Selected network is not avalable")
+            print("The selected network is not available.")
 
         # Define training parameters
         self.classes = XrayDataset.classes
         self.epochs = epochs
         self.val_epochs = val_epochs
         self.criterion = nn.BCELoss()
-        param_groups = [{"params": self.net.res_next.layer4.parameters(),
+        param_groups = [{"params": [param for name, param in self.net.named_parameters() if "resnet.7" in name],
                          "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
-                        {"params":  [param for name, param in self.net.named_parameters() if "layer4" not in name],
+                        {"params":  [param for name, param in self.net.named_parameters() if "resnet.7" not in name],
                          "lr": self.net_params["lr_last"]}]
         self.optimizer = getattr(torch.optim, net_params["optimizer"])(param_groups)
         self.convergence_thresh = convergence_thresh
@@ -198,7 +198,6 @@ class NetworkTrainer:
                 projection = projections[j]
                 projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
                                                           show=False)
-                projection = np.resize(projection, (net.input_dim, net.input_dim))
                 projection = torch.tensor(projection, dtype=torch.float32)
                 temp.append(projection)
             adjusted_projection.append(temp)
@@ -206,7 +205,8 @@ class NetworkTrainer:
         # Loss evaluation
         input = np.stack(adjusted_projection)
         input = torch.from_numpy(input)
-        output = net(input, projection_type_batch)
+        input = input.to(self.device)
+        output = net(input, extra[1], projection_type_batch)
         loss = self.criterion(output, y)
 
         # Accuracy evaluation
@@ -648,10 +648,10 @@ if __name__ == "__main__":
     working_dir1 = "./../../"
     model_name1 = "resnext50"
     net_type1 = NetType.RES_NEXT50
-    epochs1 = 1
+    epochs1 = 100
     preprocess_inputs1 = True
     trial_n1 = None
-    val_epochs1 = 1
+    val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
     show_test1 = False
@@ -662,8 +662,9 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    net_params1 = {"n_conv_neurons": 1024, "n_conv_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.01, "lr_second_last_factor": 10, "batch_size": 4}
+    net_params1 = {"n_conv_segment_neurons": 1024, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 1,
+                   "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
+                   "lr_last": 0.001, "lr_second_last_factor": 10, "batch_size": 4}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
