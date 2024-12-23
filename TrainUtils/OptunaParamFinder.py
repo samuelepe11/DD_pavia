@@ -38,13 +38,15 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         params = {
-            "n_conv_neurons": int(2 ** (trial.suggest_int("n_conv_neurons", 9, 11, step=1))),
-            "n_conv_layers": int(trial.suggest_int("n_conv_layers", 1, 3, step=1)),
+            "n_conv_segment_neurons": int(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
+            "n_conv_view_neurons": int(2 ** (trial.suggest_int("n_conv_view_neurons", 9, 11, step=1))),
+            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
+            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 3, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
-            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
-            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 3, step=1)), 3),
-            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 5, 15, step=5),
+            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
+            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 4, step=1)), 3),
+            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 5, 55, step=10),
             "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1)))
         }
 
@@ -96,7 +98,7 @@ class OptunaParamFinder:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")
         except RuntimeError as e:
-            print("Unable to plot paraeter importance!", e)
+            print("Unable to plot parameter importance!", e)
 
 
 if __name__ == "__main__":

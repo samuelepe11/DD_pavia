@@ -42,7 +42,7 @@ class ConvBranch(nn.Module):
 
         conv_list = []
         for i in range(len(self.channels) - 1):
-            conv_list.append(nn.Conv2d(self.channels[i], self.channels[i + 1], kernel_size=self.kernel_size))
+            conv_list.append(nn.Conv2d(self.channels[i], self.channels[i + 1], kernel_size=self.kernel_size, padding="same"))
             conv_list.append(nn.ReLU())
         self.conv = nn.Sequential(*conv_list)
 
@@ -73,6 +73,7 @@ class ConvBaseNetwork(nn.Module):
                 ]),
             ], p=0.3),
             transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
         # Define pre-trained network
@@ -107,15 +108,16 @@ class ConvBaseNetwork(nn.Module):
         # Process all channels through the pre-trained network (ResNet)
         x = x.view(batch_size * n_channels, 1, height, width)
         x = x.repeat(1, 3, 1, 1)
+        if self.set_training:
+            x = torch.stack([self.data_transforms(img) for img in x])
+            x = x.to(self.device)
         features = self.feature_extractor(x)
         if not features.is_contiguous():
             features = features.contiguous()
 
         # Segment-specific processing
-        new_w = features.shape[-2] - (self.params["kernel_size"] - 1) * self.params["n_conv_segment_layers"]
-        new_h = features.shape[-1] - (self.params["kernel_size"] - 1) * self.params["n_conv_segment_layers"]
-        segment_processed = torch.zeros(batch_size * n_channels, self.params["n_conv_segment_neurons"], new_w, new_h,
-                                        device=x.device)
+        segment_processed = torch.zeros(batch_size * n_channels, self.params["n_conv_segment_neurons"],
+                                        features.shape[-2], features.shape[-1], device=x.device)
         for i in range(len(XrayDataset.segment_dict)):
             segment_type = list(XrayDataset.segment_dict.keys())[i]
             mask = torch.tensor([1 if segm_id == segment_type else 0 for segm_id in segment_ids])
@@ -124,10 +126,8 @@ class ConvBaseNetwork(nn.Module):
             segment_processed = segment_processed.contiguous()
 
         # View-specific processing
-        new_w = segment_processed.shape[-2] - (self.params["kernel_size"] - 1) * self.params["n_conv_view_layers"]
-        new_h = segment_processed.shape[-1] - (self.params["kernel_size"] - 1) * self.params["n_conv_view_layers"]
-        view_processed = torch.zeros(batch_size * n_channels, self.params["n_conv_view_neurons"], new_w, new_h,
-                                     device=x.device)
+        view_processed = torch.zeros(batch_size * n_channels, self.params["n_conv_view_neurons"], 
+                                     segment_processed.shape[-2], segment_processed.shape[-1], device=x.device)
         for i in range(len(ProjectionType)):
             view_type = list(ProjectionType)[i]
             mask = torch.tensor(view_ids == view_type).view(batch_size * n_channels)
