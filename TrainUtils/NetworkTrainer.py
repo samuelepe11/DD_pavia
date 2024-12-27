@@ -22,6 +22,7 @@ from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
 from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
+from Networks.BaseViT import BaseViT
 from TrainUtils.StatsHolder import StatsHolder
 
 
@@ -53,6 +54,8 @@ class NetworkTrainer:
             self.net = BaseResNeXt50(params=net_params, device=self.device)
         elif net_type == NetType.RES_NEXT101:
             self.net = BaseResNeXt101(params=net_params, device=self.device)
+        elif net_type == NetType.ViT:
+            self.net = BaseViT(params=net_params, device=self.device)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -147,11 +150,24 @@ class NetworkTrainer:
                     print(" > val loss = " + str(np.round(val_stats.loss, 5)))
                     print(" > val acc = " + str(np.round(val_stats.acc * 100, 2)) + "%")
 
-                    # Update training curves
+                    # Update and store training curves
                     if epoch != 0:
                         plt.close()
                         self.draw_training_curves()
+                        if trial_n is None:
+                            filepath = self.results_dir + "training_curves.jpg"
+                        else:
+                            filepath = self.results_dir + "trial_" + str(trial_n - 1) + "_curves.jpg"
+                        if self.s3 is not None:
+                            filepath = self.s3.open(filepath, "wb")
+                        plt.savefig(filepath)
+
+                        plt.close()
+                        self.draw_training_curves()
                         plt.show()
+
+                    # Store intermediate result
+                    self.save_model(trial_n)
 
                 if trial is not None:
                     trial.report(val_stats.f1, epoch)
@@ -575,7 +591,9 @@ class NetworkTrainer:
         plt.close()
 
     @staticmethod
-    def load_model(working_dir, model_name, trial_n=None, use_cuda=True, s3=None):
+    def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
+                   s3=None):
+        print("Loading " + model_name + "...")
         if trial_n is None:
             file_name = model_name
         else:
@@ -585,11 +603,12 @@ class NetworkTrainer:
         if s3 is not None:
             filepath = s3.open(filepath)
         checkpoint = torch.load(filepath)
-        network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=None,
-                                         val_data=None, test_data=None, net_type=checkpoint["net_type"],
+        network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
+                                         val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3)
+        network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
@@ -646,9 +665,9 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext50"
-    net_type1 = NetType.RES_NEXT50
-    epochs1 = 100
+    model_name1 = "resnext101"
+    net_type1 = NetType.RES_NEXT101
+    epochs1 = 300
     preprocess_inputs1 = True
     trial_n1 = None
     val_epochs1 = 10
@@ -664,7 +683,7 @@ if __name__ == "__main__":
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 1024, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 1,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.001, "lr_second_last_factor": 10, "batch_size": 4}
+                   "lr_last": 0.0001, "lr_second_last_factor": 10, "batch_size": 32}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
@@ -676,5 +695,9 @@ if __name__ == "__main__":
                                    assess_calibration=assess_calibration1)
     
     # Evaluate model
+    print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
-                                         use_cuda=use_cuda1)
+                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
+                                         test_data=test_data1)
+    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)

@@ -2,31 +2,22 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from torchvision import models
-from torchvision.models import ResNeXt50_32X4D_Weights, ResNeXt101_64X4D_Weights
 
 from DataUtils.XrayDataset import XrayDataset
 from Enumerators.ProjectionType import ProjectionType
-from Enumerators.NetType import NetType
 
 
 # Classes
 class PretrainedFeatureExtractor(nn.Module):
 
-    def __init__(self, net_type, freezable_layers):
+    def __init__(self, feature_extractor_model, freezable_layers):
         super(PretrainedFeatureExtractor, self).__init__()
 
-        # Load a pre-trained ResNet model and remove the classifier
-        if net_type == NetType.RES_NEXT50:
-            resnet = models.resnext50_32x4d(weights=ResNeXt50_32X4D_Weights.DEFAULT, progress=False)
-        elif net_type == NetType.RES_NEXT101:
-            resnet = models.resnext101_64x4d(weights=ResNeXt101_64X4D_Weights.DEFAULT, progress=False)
-        else:
-            raise ValueError(f"Unsupported network type: {net_type}")
-        ConvBaseNetwork.freeze_layers(resnet, freezable_layers)
+        # Freeze network layers
+        ConvBaseNetwork.freeze_layers(feature_extractor_model, freezable_layers)
 
         # Extract up to penultimate layer
-        self.features = nn.Sequential(*list(resnet.children())[:-2])
+        self.features = nn.Sequential(*list(feature_extractor_model.children())[:-2])
         self.output_channels = list(self.features.parameters())[-1].shape[0]
 
     def forward(self, x):
@@ -56,12 +47,13 @@ class ConvBaseNetwork(nn.Module):
     input_dim = None
     freezable_layers = None
 
-    def __init__(self, net_type, params, device="cpu"):
+    def __init__(self, feature_extractor_model, params, device="cpu"):
         super(ConvBaseNetwork, self).__init__()
         self.device = device
         self.params = params
 
         # Define attributes
+        self.input_dim = 224
         self.data_transforms = transforms.Compose([
             transforms.ToPILImage(),
             transforms.RandomApply([
@@ -77,7 +69,8 @@ class ConvBaseNetwork(nn.Module):
         ])
 
         # Define pre-trained network
-        self.feature_extractor = PretrainedFeatureExtractor(net_type=net_type, freezable_layers=self.freezable_layers)
+        self.feature_extractor = PretrainedFeatureExtractor(feature_extractor_model=feature_extractor_model,
+                                                            freezable_layers=self.freezable_layers)
 
         # Define new convolutional branches
         self.conv_segment_sizes = ([self.feature_extractor.output_channels] + [params["n_conv_segment_neurons"]]

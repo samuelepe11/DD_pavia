@@ -6,3 +6,4 @@ from enum import Enum
 class NetType(Enum):
     RES_NEXT50 = "ResNeXt-50 model"
     RES_NEXT101 = "ResNeXt-101 model"
+    ViT = "Visual Transformer model"

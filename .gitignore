@@ -2,3 +2,8 @@
 __pycache__/
 venv/
 DataUtils/medsam_vit_b.pth
+.ipynb_checkpoints/
+DataUtils/.ipynb_checkpoints/
+Enumerators/.ipynb_checkpoints/
+Networks/.ipynb_checkpoints/
+TrainUtils/.ipynb_checkpoints/
