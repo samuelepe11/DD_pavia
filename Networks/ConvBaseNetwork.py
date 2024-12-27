@@ -26,15 +26,19 @@ class PretrainedFeatureExtractor(nn.Module):
 
 class ConvBranch(nn.Module):
 
-    def __init__(self, channels, kernel_size):
+    def __init__(self, channels, kernel_size, p_drop=0, use_norm=False):
         super(ConvBranch, self).__init__()
         self.channels = channels
         self.kernel_size = kernel_size
 
         conv_list = []
+        if use_norm:
+            conv_list.append(nn.BatchNorm2d(self.channels[0]))
         for i in range(len(self.channels) - 1):
-            conv_list.append(nn.Conv2d(self.channels[i], self.channels[i + 1], kernel_size=self.kernel_size, padding="same"))
+            conv_list.append(nn.Conv2d(self.channels[i], self.channels[i + 1], kernel_size=self.kernel_size,
+                                       padding="same"))
             conv_list.append(nn.ReLU())
+        conv_list.append(nn.Dropout(p=p_drop))
         self.conv = nn.Sequential(*conv_list)
 
     def forward(self, x):
@@ -77,12 +81,14 @@ class ConvBaseNetwork(nn.Module):
                                    * params["n_conv_segment_layers"])
         self.kernel_size = params["kernel_size"]
         self.segment_branches = nn.ModuleList([ConvBranch(channels=self.conv_segment_sizes,
-                                                          kernel_size=self.kernel_size)
+                                                          kernel_size=self.kernel_size, p_drop=params["p_dropout"],
+                                                          use_norm=params["use_batch_norm"])
                                                for _ in XrayDataset.segment_dict.keys()])
 
         self.conv_view_sizes = ([params["n_conv_segment_neurons"]] + [params["n_conv_view_neurons"]]
                                 * params["n_conv_view_layers"])
-        self.view_branches = nn.ModuleList([ConvBranch(channels=self.conv_view_sizes, kernel_size=self.kernel_size)
+        self.view_branches = nn.ModuleList([ConvBranch(channels=self.conv_view_sizes, kernel_size=self.kernel_size,
+                                                       p_drop=params["p_dropout"], use_norm=params["use_batch_norm"])
                                             for _ in ProjectionType])
 
         # Define final fully connected layers

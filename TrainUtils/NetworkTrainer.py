@@ -683,7 +683,8 @@ if __name__ == "__main__":
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 1024, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 1,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.0001, "lr_second_last_factor": 10, "batch_size": 32}
+                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 32, "p_dropout": 0,
+                   "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,

@@ -419,7 +419,15 @@ class MaskSurvey:
             # Draw confusion matrices
             cm = [[user_tp[user], user_fp[user]], [user_fn[user], user_tn[user]]]
             filename = user.replace(" ", "_").lower()
-            NetworkTrainer.draw_multiclass_confusion_matrix(cm, XrayDataset.classes, self.mask_dir + filename + "_cm.jpg")
+            NetworkTrainer.draw_multiclass_confusion_matrix(cm, XrayDataset.classes, self.mask_dir + filename +
+                                                            "_cm.jpg")
+
+            # Compute user F1-score
+            user_precis = user_tp[user] / (user_tp[user] + user_fp[user])
+            user_recall = user_tp[user] / (user_tp[user] + user_fn[user])
+            user_f1 = 2 * user_precis * user_recall / (user_precis + user_recall)
+            print("F1-score for " + user + ": " + str(np.round(user_f1 * 100, 2)) + "%")
+
         print()
         and_accuracy = MaskSurvey.normalize_acc(and_accuracy, n_instances)
         print("Accuracy if every user is right: " + str(and_accuracy) + "%")

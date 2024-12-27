@@ -45,9 +45,11 @@ class OptunaParamFinder:
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
-            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), 3),
+            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=3),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1)))
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1))),
+            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 0, 6, step=2), decimals=1),
+            "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
 
         # Define seeds
