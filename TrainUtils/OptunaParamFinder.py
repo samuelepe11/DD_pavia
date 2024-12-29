@@ -1,9 +1,12 @@
 # Import packages
-import matplotlib.pyplot as plt
+import os
 import optuna
+from optuna.trial import FrozenTrial, TrialState
+from optuna.distributions import FloatDistribution, IntDistribution, CategoricalDistribution
 import numpy as np
-import torch
-import kaleido
+import pandas as pd
+import json
+from datetime import datetime
 
 from DataUtils.XrayDataset import XrayDataset
 from TrainUtils.NetworkTrainer import NetworkTrainer
@@ -25,27 +28,62 @@ class OptunaParamFinder:
         self.val_epochs = val_epochs
         self.use_cuda = use_cuda
 
-        self.counter = 0
+        self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
+        if s3 is None:
+            if model_name not in os.listdir(self.results_dir):
+                os.mkdir(self.results_dir + model_name)
+        else:
+            if not s3.exists(self.results_dir + model_name):
+                s3.touch(self.results_dir + model_name + "/empty.txt")
+        self.results_dir += model_name + "/"
+        self.s3 = s3
+
+        self.n_trials = n_trials
         self.study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(),
                                          pruner=optuna.pruners.MedianPruner())
-        self.n_trials = n_trials
+        self.counter = 0
 
-        self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/"
-        self.s3 = s3
+        # Retrieve previous results
+        if "optuna_study_results.csv" in os.listdir(self.results_dir):
+            filepath = self.results_dir + "distributions.json"
+            f = open(filepath, "r") if self.s3 is None else self.s3.open(filepath, "r")
+            distributions = json.load(f)
+            distributions = {k: eval(v["name"])(**{key: value for key, value in v.items() if key != "name"})
+                             for k, v in distributions.items()}
+
+            df = pd.read_csv(self.results_dir + "optuna_study_results.csv")
+            for _, row in df.iterrows():
+                params = row.filter(like="params_").to_dict()
+                params = {k.replace("params_", ""): v for k, v in params.items()}
+                trial = FrozenTrial(
+                    number=int(row["number"]),
+                    state=TrialState.COMPLETE,
+                    value=row["value"],
+                    datetime_start=datetime.strptime(row["datetime_start"], "%Y-%m-%d %H:%M:%S.%f"),
+                    datetime_complete=datetime.strptime(row["datetime_complete"], "%Y-%m-%d %H:%M:%S.%f"),
+                    params=params,
+                    distributions=distributions,
+                    user_attrs={},
+                    system_attrs={},
+                    intermediate_values={},
+                    trial_id=self.counter,
+                )
+                self.study.add_trial(trial)
+                self.counter += 1
 
     def initialize_study(self):
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials)
 
     def objective(self, trial):
         params = {
-            "n_conv_segment_neurons": 1024,
-            "n_conv_view_neurons": 1024,
+            "n_conv_segment_neurons": 1024,  # np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
+            "n_conv_view_neurons": 1024,  # np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 9, 11, step=1))),
             "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
             "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 3, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
-            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=3),
+            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=5),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
             "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1))),
             "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 0, 6, step=2), decimals=1),
@@ -70,6 +108,19 @@ class OptunaParamFinder:
         return val_f1
 
     def analyze_study(self):
+        # Store study results
+        print("Storing study...")
+        df = self.study.trials_dataframe()
+        df.to_csv(self.results_dir + "optuna_study_results.csv", index=False)
+
+        # Store parameters distributions
+        distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
+                         self.study.best_trial.distributions.items()}
+        filepath = self.results_dir + "distributions.json"
+        f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "wb")
+        json.dump(distributions, f, indent=4)
+        print("Study stored!")
+
         print("Best study:")
         best_trial = self.study.best_trial
         for key, value in best_trial.params.items():
@@ -106,8 +157,8 @@ class OptunaParamFinder:
 if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext50_optuna"
-    net_type1 = NetType.RES_NEXT50
+    model_name1 = "attention_vit_optuna"
+    net_type1 = NetType.ATTENTION_VIT
     epochs1 = 1
     val_epochs1 = 1
     use_cuda1 = False

@@ -14,6 +14,8 @@ from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
 from functools import partial
+
+from Networks.AttentionViT import AttentionViT
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
 
 from DataUtils.XrayDataset import XrayDataset
@@ -50,12 +52,14 @@ class NetworkTrainer:
 
         self.net_type = net_type
         self.net_params = net_params
-        if net_type == NetType.RES_NEXT50:
+        if net_type == NetType.BASE_RES_NEXT50:
             self.net = BaseResNeXt50(params=net_params, device=self.device)
-        elif net_type == NetType.RES_NEXT101:
+        elif net_type == NetType.BASE_RES_NEXT101:
             self.net = BaseResNeXt101(params=net_params, device=self.device)
-        elif net_type == NetType.ViT:
+        elif net_type == NetType.BASE_VIT:
             self.net = BaseViT(params=net_params, device=self.device)
+        elif net_type == NetType.ATTENTION_VIT:
+            self.net = AttentionViT(params=net_params, device=self.device)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -221,7 +225,6 @@ class NetworkTrainer:
         # Loss evaluation
         input = np.stack(adjusted_projection)
         input = torch.from_numpy(input)
-        input = input.to(self.device)
         output = net(input, extra[1], projection_type_batch)
         loss = self.criterion(output, y)
 
@@ -665,9 +668,9 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "resnext101"
-    net_type1 = NetType.RES_NEXT101
-    epochs1 = 300
+    model_name1 = "atention_vit"
+    net_type1 = NetType.ATTENTION_VIT
+    epochs1 = 2
     preprocess_inputs1 = True
     trial_n1 = None
     val_epochs1 = 10
@@ -683,7 +686,7 @@ if __name__ == "__main__":
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 1024, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 1,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 32, "p_dropout": 0,
+                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 4, "p_dropout": 0,
                    "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
