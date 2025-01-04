@@ -237,9 +237,9 @@ class NetworkTrainer:
     def select_dataset(self, set_type):
         if self.train_data is None:
             # Read datasets
-            self.train_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training", s3=self.s3)
-            self.val_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation", s3=self.s3)
-            self.test_data = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test", s3=self.s3)
+            self.train_data = XrayDataset.load_dataset(working_dir=self.working_dir, dataset_name="xray_dataset_training", s3=self.s3)
+            self.val_data = XrayDataset.load_dataset(working_dir=self.working_dir, dataset_name="xray_dataset_validation", s3=self.s3)
+            self.test_data = XrayDataset.load_dataset(working_dir=self.working_dir, dataset_name="xray_dataset_test", s3=self.s3)
 
             # Load datasets
             self.train_loader, self.train_dim = self.load_data(self.train_data, shuffle=True)
@@ -427,7 +427,7 @@ class NetworkTrainer:
             if assess_calibration:
                 NetworkTrainer.show_calibration_table(test_stats, "test")
 
-        if show_process or trial_n is not None:
+        if (show_process or trial_n is not None) and len(self.train_losses) != 0:
             self.draw_training_curves()
             if show_process:
                 filepath = self.results_dir + "training_curves.jpg"

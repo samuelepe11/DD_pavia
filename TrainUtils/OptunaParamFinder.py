@@ -3,6 +3,7 @@ import os
 import optuna
 from optuna.trial import FrozenTrial, TrialState
 from optuna.distributions import FloatDistribution, IntDistribution, CategoricalDistribution
+from optuna.exceptions import TrialPruned
 import numpy as np
 import pandas as pd
 import json
@@ -44,7 +45,8 @@ class OptunaParamFinder:
         self.counter = 0
 
         # Retrieve previous results
-        if "optuna_study_results.csv" in os.listdir(self.results_dir):
+        file_list = os.listdir(self.results_dir) if self.s3 is None else [x.split("/")[-1] for x in self.s3.ls(self.results_dir)]
+        if "optuna_study_results.csv" in file_list:
             filepath = self.results_dir + "distributions.json"
             f = open(filepath, "r") if self.s3 is None else self.s3.open(filepath, "r")
             distributions = json.load(f)
@@ -76,17 +78,17 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         params = {
-            "n_conv_segment_neurons": 1024,  # np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
-            "n_conv_view_neurons": 1024,  # np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 9, 11, step=1))),
-            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 12, step=1))),
+            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 8, 11, step=1))),
+            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 2, step=1)),
             "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 3, step=1)),
-            "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
-            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
-            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=5),
+            "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 2, 4, step=1)),
+            "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
+            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 4, 6, step=1)), decimals=6),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 7, step=1))),
-            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 0, 6, step=2), decimals=1),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 4, 5, step=1))),
+            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 4, 8, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
 
@@ -102,6 +104,8 @@ class OptunaParamFinder:
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
                                      net_params=params, use_cuda=self.use_cuda, s3=self.s3)
             val_f1 = trainer.train(show_epochs=False, trial_n=self.counter, trial=trial)
+        except TrialPruned:
+            raise
         except Exception as e:
             print(f"An error occurred: {e}")
             val_f1 = 0
@@ -117,8 +121,8 @@ class OptunaParamFinder:
         distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
                          self.study.best_trial.distributions.items()}
         filepath = self.results_dir + "distributions.json"
-        f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "wb")
-        json.dump(distributions, f, indent=4)
+        f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "w")
+        json_file = json.dump(distributions, f, indent=4)
         print("Study stored!")
 
         print("Best study:")

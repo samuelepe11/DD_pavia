@@ -48,6 +48,10 @@ class ConvAttentionNetwork(ConvBaseNetwork):
         # Segment- and view-specific processing
         x = x.view(batch_size * n_channels, 1, height, width)
         x = x.repeat(1, 3, 1, 1)
+        if self.training:
+            x = [self.training_data_transforms(img) for img in x]
+        x = torch.stack([self.inference_data_transforms(img) for img in x])
+        x = x.to(self.device)
         x_processed = self.apply_convolutional_branches(x, batch_size, n_channels, segment_ids, view_ids)
 
         # Post-process all the features with the pre-trained attention-based network
