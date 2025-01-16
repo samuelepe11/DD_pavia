@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+from torch.nn.parallel.scatter_gather import scatter
 
 from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
 from Networks.ConvBranch import ConvBranch
@@ -81,8 +82,18 @@ class ConvBaseNetwork(nn.Module):
         fc_list.append(nn.Sigmoid())
         self.fc = nn.Sequential(*fc_list)
 
-    def forward(self, x, segment_ids, view_ids):
+    def forward(self, x, segment_ids, view_ids, n_parallel_gpu=0):
         batch_size, n_channels, height, width = x.shape
+        if n_parallel_gpu > 1:
+            current_device = torch.cuda.current_device()
+            segment_ids = torch.tensor([XrayDataset.segment_id_list.index(segm) for segm in segment_ids])
+            segment_ids = scatter(segment_ids, target_gpus=list(range(n_parallel_gpu)), dim=0)
+            segment_ids = segment_ids[current_device]
+            segment_ids = [XrayDataset.segment_id_list[segm] for segm in segment_ids.tolist()]
+            view_ids = torch.tensor([[list(ProjectionType).index(col_val) for col_val in row] for row in view_ids])
+            view_ids = scatter(view_ids, target_gpus=list(range(n_parallel_gpu)), dim=0)
+            view_ids = view_ids[current_device]
+            view_ids = [[list(ProjectionType)[col_val] for col_val in row] for row in view_ids.tolist()]
 
         # Process all channels through the pre-trained convolutional network
         x = x.view(batch_size * n_channels, 1, height, width)
@@ -117,7 +128,7 @@ class ConvBaseNetwork(nn.Module):
         segment_processed = torch.zeros(batch_size * n_channels, self.conv_segment_sizes[-1],
                                         x.shape[-2], x.shape[-1], device=x.device)
         for i in range(len(XrayDataset.segment_dict)):
-            segment_type = list(XrayDataset.segment_dict.keys())[i]
+            segment_type = XrayDataset.segment_id_list[i]
             mask = torch.tensor([True if segm_id == segment_type else False for segm_id in segment_ids])
             mask = mask.unsqueeze(1).repeat(1, n_channels)
             mask = mask.view(batch_size * n_channels)
@@ -130,7 +141,8 @@ class ConvBaseNetwork(nn.Module):
                                      segment_processed.shape[-2], segment_processed.shape[-1], device=x.device)
         for i in range(len(ProjectionType)):
             view_type = list(ProjectionType)[i]
-            mask = torch.tensor(view_ids == view_type).view(batch_size * n_channels)
+            mask = torch.tensor([[True if col_val == view_type else False for col_val in row] for row in view_ids])
+            mask = mask.view(batch_size * n_channels)
             view_processed[mask] = self.view_branches[i](segment_processed[mask])
         if not view_processed.is_contiguous():
             view_processed = view_processed.contiguous()

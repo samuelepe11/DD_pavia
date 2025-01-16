@@ -10,7 +10,7 @@ class PretrainedAttentionModule(nn.Module):
         super(PretrainedAttentionModule, self).__init__()
         self.device = device
 
-        # Freeze network layers
+        # Freeze all network layers
         for param in projection_module.parameters():
             param.requires_grad = False
         for param in encoder_module.parameters():
@@ -25,6 +25,7 @@ class PretrainedAttentionModule(nn.Module):
     def forward(self, x):
         # Project patches
         batch_size = x.size(0)
+            
         patches = self.projection_module(x)
         patches = patches.flatten(2).transpose(1, 2)
 

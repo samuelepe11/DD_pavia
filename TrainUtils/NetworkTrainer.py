@@ -33,12 +33,13 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None):
+                 use_cuda=True, s3=None, n_parallel_gpu=0):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
         self.s3 = s3
+        self.n_parallel_gpu = n_parallel_gpu
         if s3 is None:
             if model_name not in os.listdir(self.results_dir):
                 os.mkdir(self.results_dir + model_name)
@@ -109,12 +110,17 @@ class NetworkTrainer:
     def train(self, show_epochs=False, trial_n=None, trial=None):
         if show_epochs:
             self.start_time = time.time()
-
-        self.net.set_cuda(cuda=self.use_cuda)
+        
+        net = self.net
+        if not self.n_parallel_gpu:
+            net.set_cuda(cuda=self.use_cuda)
+        else:
+            net = nn.DataParallel(net)
+            net = net.cuda()
+            
         if self.use_cuda:
             self.criterion = self.criterion.cuda()
-        net = self.net
-
+    
         if len(self.train_losses) == 0 and trial is None:
             print("\nPerforming initial evaluation...")
             _, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
@@ -122,7 +128,11 @@ class NetworkTrainer:
         if show_epochs:
             print("\nStarting the training phase...")
         for epoch in range(self.epochs):
-            net.set_training(True)
+            if not self.n_parallel_gpu:
+                net.set_training(True)
+            else:
+                net.train()
+                
             train_loss = 0
             train_acc = 0
             for batch in self.train_loader:
@@ -225,7 +235,7 @@ class NetworkTrainer:
         # Loss evaluation
         input = np.stack(adjusted_projection)
         input = torch.from_numpy(input)
-        output = net(input, extra[1], projection_type_batch)
+        output = net(input, extra[1], projection_type_batch, self.n_parallel_gpu)
         loss = self.criterion(output, y)
 
         # Accuracy evaluation
@@ -291,11 +301,18 @@ class NetworkTrainer:
         return stats
 
     def test(self, set_type=SetType.TRAIN, show_cm=False, assess_calibration=False):
-        self.net.set_cuda(cuda=self.use_cuda)
+        net = self.net
+        if not self.n_parallel_gpu:
+            net.set_cuda(cuda=self.use_cuda)
+            net.set_training(False)
+        else:
+            net = nn.DataParallel(net)
+            net = net.cuda()
+            net.eval()
+            
         if self.use_cuda:
             self.criterion = self.criterion.cuda()
 
-        net = self.net
         _, loader, _ = self.select_dataset(set_type)
 
         # Store class labels
@@ -303,7 +320,6 @@ class NetworkTrainer:
         y_true = []
         y_pred = []
         loss = 0
-        net.set_training(False)
         with torch.no_grad():
             for batch in loader:
                 temp_loss, output, y, _ = self.apply_network(net, batch, set_type=set_type)

@@ -24,8 +24,8 @@ class XrayDataset(Dataset):
                   "fracture_position", "clinical_report", "ct_present", "ct_date", "ct_report", "mri_present",
                   "mri_date", "mri_report", "notes"]
     segment_dict = {"C": "cervical", "D": "thoracic", "L": "lumbar", "S": "sacral-coccygeal"}
+    segment_id_list = list(segment_dict.keys())
     segment_dict_ita = {"C": "cervicale", "D": "dorsale", "L": "lombare", "S": "sacro-coccigeo"}
-    proejection_dict = {"LL": "cervical", "D": "thoracic", "L": "lumbar", "S": "sacral-coccygeal"}
     classes = ["fracture absent", "fracture present"]
 
     def __init__(self, working_dir):

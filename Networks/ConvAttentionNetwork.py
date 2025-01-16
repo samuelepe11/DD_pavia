@@ -1,11 +1,13 @@
 # Import packages
 import torch
 import torch.nn as nn
+from torch.nn.parallel.scatter_gather import scatter
 
 from Networks.ConvBaseNetwork import ConvBaseNetwork
 from Networks.ConvBranch import ConvBranch
 from Networks.PretrainedAttentionModule import PretrainedAttentionModule
 from DataUtils.XrayDataset import XrayDataset
+from Enumerators.ProjectionType import ProjectionType
 
 
 # Class
@@ -42,8 +44,18 @@ class ConvAttentionNetwork(ConvBaseNetwork):
         self.fc_sizes = [self.attention_module.output_channels] * params["n_fc_layers"]
         self.initialize_fc_module()
 
-    def forward(self, x, segment_ids, view_ids):
+    def forward(self, x, segment_ids, view_ids, n_parallel_gpu=0):
         batch_size, n_channels, height, width = x.shape
+        if n_parallel_gpu > 1:
+            current_device = torch.cuda.current_device()
+            segment_ids = torch.tensor([XrayDataset.segment_id_list.index(segm) for segm in segment_ids])
+            segment_ids = scatter(segment_ids, target_gpus=list(range(n_parallel_gpu)), dim=0)
+            segment_ids = segment_ids[current_device]
+            segment_ids = [XrayDataset.segment_id_list[segm] for segm in segment_ids.tolist()]
+            view_ids = torch.tensor([[list(ProjectionType).index(col_val) for col_val in row] for row in view_ids])
+            view_ids = scatter(view_ids, target_gpus=list(range(n_parallel_gpu)), dim=0)
+            view_ids = view_ids[current_device]
+            view_ids = [[list(ProjectionType)[col_val] for col_val in row] for row in view_ids.tolist()]
 
         # Segment- and view-specific processing
         x = x.view(batch_size * n_channels, 1, height, width)
