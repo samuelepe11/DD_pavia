@@ -18,7 +18,7 @@ from Enumerators.NetType import NetType
 class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
-                 n_trials, s3=None):
+                 n_trials, s3=None, n_parallel_gpu=0):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -28,6 +28,7 @@ class OptunaParamFinder:
         self.epochs = epochs
         self.val_epochs = val_epochs
         self.use_cuda = use_cuda
+        self.n_parallel_gpu = n_parallel_gpu
 
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
         if s3 is None:
@@ -78,7 +79,7 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         params = {
-            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 12, step=1))),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
             "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 8, 11, step=1))),
             "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 2, step=1)),
             "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 3, step=1)),
@@ -87,7 +88,7 @@ class OptunaParamFinder:
             "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 4, 6, step=1)), decimals=6),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 0, 0, step=1))),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 2, step=1))),
             "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 4, 8, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
@@ -102,7 +103,7 @@ class OptunaParamFinder:
             trainer = NetworkTrainer(model_name=self.model_name, working_dir=self.working_dir,
                                      train_data=self.train_data, val_data=self.val_data, test_data=self.test_data,
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
-                                     net_params=params, use_cuda=self.use_cuda, s3=self.s3)
+                                     net_params=params, use_cuda=self.use_cuda, s3=self.s3, n_parallel_gpu=self.n_parallel_gpu)
             val_f1 = trainer.train(show_epochs=False, trial_n=self.counter, trial=trial)
         except TrialPruned:
             raise
