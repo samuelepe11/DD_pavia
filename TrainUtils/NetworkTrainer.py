@@ -1,6 +1,5 @@
 # Import packages
 import os
-
 import cv2
 import torch
 import torch.nn as nn
@@ -11,6 +10,7 @@ import matplotlib.pyplot as plt
 import optuna
 from torch.utils.data import DataLoader
 from torcheval.metrics.functional import multiclass_confusion_matrix
+from torch.cuda.amp import autocast, GradScaler
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
 from functools import partial
@@ -33,7 +33,7 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False):
+                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, scaler=None):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -87,6 +87,7 @@ class NetworkTrainer:
         self.val_accuracies = []
         self.val_eval_epochs = []
         self.optuna_study = None
+        self.scaler = scaler
 
         self.projection_dataset = projection_dataset
         if projection_dataset:
@@ -107,7 +108,14 @@ class NetworkTrainer:
             self.preprocessor = Preprocessor(dataset=train_data, only_apply=True, s3=s3)
 
     def load_data(self, data, shuffle=False):
-        dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle, num_workers=0,
+        if self.use_cuda:
+            num_workers = 8
+            pin_memory = True
+        else:
+            num_workers = 0
+            pin_memory = False
+        dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle,
+                                num_workers=num_workers, pin_memory=pin_memory,
                                 collate_fn=partial(NetworkTrainer.custom_collate_fn, img_dim=self.net.input_dim))
         dim = len(data)
 
@@ -142,13 +150,23 @@ class NetworkTrainer:
             train_loss = 0
             train_acc = 0
             for batch in self.train_loader:
-                loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
+                if self.scaler is not None:
+                    self.optimizer.zero_grad()
+                    with autocast():
+                        loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
+                else:
+                    loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
                 train_loss += loss.item()
                 train_acc += acc.item()
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
 
             train_loss = train_loss / len(self.train_loader)
             train_acc = train_acc / len(self.train_loader)

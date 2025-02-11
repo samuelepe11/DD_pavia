@@ -89,7 +89,7 @@ class OptunaParamFinder:
             "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 4, 6, step=1)), decimals=6),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 2, step=1))),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 3, step=1))),
             "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 4, 8, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
