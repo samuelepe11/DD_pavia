@@ -18,7 +18,7 @@ from Enumerators.NetType import NetType
 class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
-                 n_trials, s3=None, n_parallel_gpu=0):
+                 n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -29,6 +29,7 @@ class OptunaParamFinder:
         self.val_epochs = val_epochs
         self.use_cuda = use_cuda
         self.n_parallel_gpu = n_parallel_gpu
+        self.projection_dataset = projection_dataset
 
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
         if s3 is None:
@@ -103,7 +104,8 @@ class OptunaParamFinder:
             trainer = NetworkTrainer(model_name=self.model_name, working_dir=self.working_dir,
                                      train_data=self.train_data, val_data=self.val_data, test_data=self.test_data,
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
-                                     net_params=params, use_cuda=self.use_cuda, s3=self.s3, n_parallel_gpu=self.n_parallel_gpu)
+                                     net_params=params, use_cuda=self.use_cuda, s3=self.s3,
+                                     n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset)
             val_f1 = trainer.train(show_epochs=False, trial_n=self.counter, trial=trial)
         except TrialPruned:
             raise
@@ -162,22 +164,26 @@ class OptunaParamFinder:
 if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "attention_vit_optuna"
-    net_type1 = NetType.ATTENTION_VIT
-    epochs1 = 1
-    val_epochs1 = 1
-    use_cuda1 = False
+    model_name1 = "projection_resnet101_optuna"
+    selected_segments1 = None
+    net_type1 = NetType.BASE_RES_NEXT101
+    epochs1 = 200
+    val_epochs1 = 10
+    use_cuda1 = True
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
-    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation")
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+                                           selected_segments=selected_segments1)
+    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
+                                         selected_segments=selected_segments1)
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+                                          selected_segments=selected_segments1)
 
     # Define Optuna model
-    n_trials1 = 1
+    n_trials1 = 10
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
-                                val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1)
+                                val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1, projection_dataset=True)
     # Run search
     optuna1.initialize_study()
 

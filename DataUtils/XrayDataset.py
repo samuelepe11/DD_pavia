@@ -325,11 +325,19 @@ class XrayDataset(Dataset):
         return self.__getitem__(ind)
 
     @staticmethod
-    def load_dataset(working_dir, dataset_name, set_type=None, s3=None):
+    def load_dataset(working_dir, dataset_name, set_type=None, s3=None, selected_segments=None):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
         file = open(file_path, "rb") if s3 is None else s3.open(file_path, "rb")
         dataset = pickle.load(file)
         print("The dataset", dataset_name, "have been loaded!")
+
+        # Select segment
+        if selected_segments is not None:
+            instances = []
+            for segm in selected_segments:
+                instances = [instance for instance in dataset.dicom_instances if segm in list(instance)[3:]]
+            dataset.dicom_instances = instances
+            dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored classes
         if dataset.working_dir == "./../":
@@ -472,8 +480,8 @@ if __name__ == "__main__":
     # dataset1.count_data()
 
     # Load an already split datasets
-    dataset_name1 = "xray_dataset_validation"
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
+    dataset_name1 = "xray_dataset_training"
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=["l"])
 
     # Show items
     ind1 = 1

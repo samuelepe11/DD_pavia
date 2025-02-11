@@ -14,17 +14,17 @@ from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
 from functools import partial
-
-from Networks.AttentionViT import AttentionViT
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
 
 from DataUtils.XrayDataset import XrayDataset
+from DataUtils.XrayProjectionDataset import XrayProjectionDataset
 from DataUtils.Preprocessor import Preprocessor
 from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
 from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
 from Networks.BaseViT import BaseViT
+from Networks.AttentionViT import AttentionViT
 from TrainUtils.StatsHolder import StatsHolder
 
 
@@ -33,7 +33,7 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=3, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None, n_parallel_gpu=0):
+                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -87,6 +87,12 @@ class NetworkTrainer:
         self.val_accuracies = []
         self.val_eval_epochs = []
         self.optuna_study = None
+
+        self.projection_dataset = projection_dataset
+        if projection_dataset:
+            train_data = XrayProjectionDataset(working_dir=working_dir, dataset=train_data)
+            val_data = XrayProjectionDataset(working_dir=working_dir, dataset=val_data)
+            test_data = XrayProjectionDataset(working_dir=working_dir, dataset=test_data)
 
         self.train_data = train_data
         self.val_data = val_data
@@ -528,7 +534,8 @@ class NetworkTrainer:
             batch_proj_id.append(proj_id_list)
             batch_img.append(np.stack(img_list))
             batch_descr.append(segment_data[0][2])
-        segment_datas = (np.stack(batch_proj_id, dtype=object), np.stack(batch_img), np.stack(batch_descr, dtype=object))
+        segment_datas = (np.stack(batch_proj_id, dtype=object), np.stack(batch_img), np.stack(batch_descr,
+                                                                                              dtype=object))
 
         return segment_datas, (pt_ids, segment_ids)
 
@@ -684,13 +691,13 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "atention_vit"
-    net_type1 = NetType.ATTENTION_VIT
-    epochs1 = 2
+    model_name1 = "projection_resnet101"
+    net_type1 = NetType.BASE_RES_NEXT101
+    epochs1 = 100
     preprocess_inputs1 = True
     trial_n1 = None
     val_epochs1 = 10
-    use_cuda1 = True
+    use_cuda1 = False
     assess_calibration1 = True
     show_test1 = False
 
@@ -700,14 +707,14 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    net_params1 = {"n_conv_segment_neurons": 1024, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 1,
+    net_params1 = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 4, "p_dropout": 0,
+                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 64, "p_dropout": 0,
                    "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
-                              use_cuda=use_cuda1)
+                              use_cuda=use_cuda1, projection_dataset=True)
 
     # Train model
     trainer1.train(show_epochs=True)
