@@ -80,17 +80,17 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         params = {
-            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
-            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 8, 11, step=1))),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 8, 10, step=1))),
+            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 8, 10, step=1))),
             "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 2, step=1)),
-            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 3, step=1)),
+            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 2, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 2, 4, step=1)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 2, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 4, 6, step=1)), decimals=6),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 3, step=1))),
-            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 4, 8, step=2), decimals=1),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 0, 3, step=1))),
+            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 6, 8, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
 
