@@ -195,7 +195,7 @@ class NetworkTrainer:
                     # Store intermediate result
                     self.save_model(trial_n)
 
-                if trial is not None:
+                if trial is not None and not double_output:
                     trial.report(val_stats.f1, epoch)
                     if trial.should_prune():
                         raise optuna.exceptions.TrialPruned()
@@ -221,7 +221,7 @@ class NetworkTrainer:
                                                                 trial_n=trial_n)
             val_output = getattr(val_stats, output_metric)
             if double_output:
-                train_output = getattr(val_stats, output_metric)
+                train_output = getattr(train_stats, output_metric)
                 return val_output, train_output
             else:
                 return val_output
