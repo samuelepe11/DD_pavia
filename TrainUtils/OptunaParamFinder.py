@@ -77,30 +77,31 @@ class OptunaParamFinder:
 
             # Untracked models
             models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
-            max_model_id = np.max([int(name[5:]) for name in models_present])
-            n_untracked_models = max_model_id - self.counter
-            for i in range(n_untracked_models):
-                trial_n = self.counter + i
-                trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=trial_n,
-                                                    use_cuda=self.use_cuda, train_data=self.train_data,
-                                                    val_data=self.val_data, test_data=self.test_data,s3=self.s3)
-                train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
-                                                                       show_cm=False, trial_n=trial_n)
-                val_output = getattr(val_stats, output_metric)
-                if double_output:
-                    train_output = getattr(train_stats, output_metric)
+            if len(models_present) > 0:
+                max_model_id = np.max([int(name[5:]) for name in models_present])
+                n_untracked_models = max_model_id - self.counter
+                if n_untracked_models > -1:
+                    for i in range(n_untracked_models + 1):
+                        trial_n = self.counter + i
+                        trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=trial_n,
+                                                            use_cuda=self.use_cuda, train_data=self.train_data,
+                                                            val_data=self.val_data, test_data=self.test_data,s3=self.s3)
+                        train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
+                                                                               show_cm=False, trial_n=trial_n)
+                        val_output = getattr(val_stats, output_metric)
+                        if double_output:
+                            train_output = getattr(train_stats, output_metric)
 
-                row = {"number": trial_n + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
-                       "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
-                if not self.double_output:
-                    row.update({"value": val_output})
-                else:
-                    row.update({"values_0": val_output, "values_1": train_output})
-                params = {k.replace("params_", ""): v for k, v in trainer.net_params.items()}
-                self.insert_trial(row, params, distributions)
-                self.counter += 1
-                print("Untracked model", trial_n, "inserted!")
-
+                        row = {"number": trial_n + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                               "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
+                        if not self.double_output:
+                            row.update({"value": val_output})
+                        else:
+                            row.update({"values_0": val_output, "values_1": train_output})
+                        params = {k.replace("params_", ""): v for k, v in trainer.net_params.items()}
+                        self.insert_trial(row, params, distributions)
+                        self.counter += 1
+                        print("Untracked model", trial_n, "inserted!")
 
     def initialize_study(self):
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials)
@@ -108,7 +109,7 @@ class OptunaParamFinder:
     def objective(self, trial):
         # Store previous results
         if self.counter >= 10 and self.counter % 10 == 0:
-            self.analyze_study(show=False)
+            self.analyze_study(show_best=False)
 
         # Sample parameters
         params = {
@@ -257,10 +258,12 @@ class OptunaParamFinder:
             )
         self.study.add_trial(trial)
 
+
 if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     model_name1 = "projection_resnet101_optuna_mcc"
+    model_name1 = "test"
     selected_segments1 = None
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
@@ -278,7 +281,7 @@ if __name__ == "__main__":
     # Define Optuna model
     n_trials1 = 16
     output_metric1 = "mcc"
-    double_output1 = True
+    double_output1 = False#True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1, projection_dataset=True,

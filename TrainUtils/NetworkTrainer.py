@@ -630,11 +630,8 @@ class NetworkTrainer:
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
                    s3=None):
-        print("Loading " + model_name + "...")
-        if trial_n is None:
-            file_name = model_name
-        else:
-            file_name = "trial_" + str(trial_n)
+        file_name = model_name if trial_n is None else "trial_" + str(trial_n)
+        print("Loading " + file_name + "...")
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
                     file_name + ".pt")
         if s3 is not None:
