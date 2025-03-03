@@ -1,9 +1,8 @@
 # Import packages
 import os
-from time import strftime
+import math
 
 import optuna
-from gradio.http_server import should_watch
 from optuna.trial import FrozenTrial, TrialState
 from optuna.distributions import FloatDistribution, IntDistribution, CategoricalDistribution
 from optuna.exceptions import TrialPruned
@@ -66,14 +65,19 @@ class OptunaParamFinder:
             distributions = {k: eval(v["name"])(**{key: value for key, value in v.items() if key != "name"})
                              for k, v in distributions.items()}
 
-            # CSV stored models
+            # CSV-stored models
             df = pd.read_csv(self.results_dir + "optuna_study_results.csv")
             for _, row in df.iterrows():
+                if row["state"] == "RUNNING":
+                    continue
                 params = row.filter(like="params_").to_dict()
                 params = {k.replace("params_", ""): v for k, v in params.items()}
-                self.insert_trial(row, params, distributions)
                 self.counter += 1
-            print("CVS stored models inserted!")
+                for k, v in params.items():
+                    if k != "optimizer" and k!= "use_batch_norm":
+                        params.update({k: int(v)})
+                self.insert_trial(row, params, distributions)
+            print("CSV-stored models inserted!")
 
             # Untracked models
             models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
@@ -82,26 +86,32 @@ class OptunaParamFinder:
                 n_untracked_models = max_model_id - self.counter
                 if n_untracked_models > -1:
                     for i in range(n_untracked_models + 1):
-                        trial_n = self.counter + i
-                        trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=trial_n,
+                        print()
+                        self.counter += 1
+                        trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=self.counter,
                                                             use_cuda=self.use_cuda, train_data=self.train_data,
                                                             val_data=self.val_data, test_data=self.test_data,s3=self.s3)
                         train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
-                                                                               show_cm=False, trial_n=trial_n)
+                                                                               show_cm=False, trial_n=self.counter)
                         val_output = getattr(val_stats, output_metric)
                         if double_output:
                             train_output = getattr(train_stats, output_metric)
 
-                        row = {"number": trial_n + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        row = {"number": self.counter + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
                                "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
                         if not self.double_output:
                             row.update({"value": val_output})
                         else:
                             row.update({"values_0": val_output, "values_1": train_output})
-                        params = {k.replace("params_", ""): v for k, v in trainer.net_params.items()}
+                        params = trainer.net_params
+                        params.update({"batch_size":int(math.log2(params["batch_size"])),
+                                       "lr_last":int(-math.log10(params["lr_last"])),
+                                       "n_conv_view_neurons":int(math.log2(params["n_conv_view_neurons"])),
+                                       "n_conv_segment_neurons":int(math.log2(params["n_conv_segment_neurons"])),
+                                       "p_drop":int(params["p_dropout"]*10)})
+                        del params["p_dropout"]
                         self.insert_trial(row, params, distributions)
-                        self.counter += 1
-                        print("Untracked model", trial_n, "inserted!")
+                        print("Untracked model", self.counter, "inserted!")
 
     def initialize_study(self):
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials)
@@ -121,7 +131,7 @@ class OptunaParamFinder:
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 2, 4, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=6),
-            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
+            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 1001, step=100),
             "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1))),
             "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 5, 9, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
@@ -162,12 +172,14 @@ class OptunaParamFinder:
         df.to_csv(self.results_dir + "optuna_study_results.csv", index=False)
 
         # Store parameters distributions
-        distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
-                         self.study.trials[-1].distributions.items()}
-        filepath = self.results_dir + "distributions.json"
-        f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "w")
-        json_file = json.dump(distributions, f, indent=4)
-        print("Study stored!")
+        distr_file = "distributions.json"
+        if distr_file not in os.listdir(self.results_dir):
+            distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
+                             self.study.trials[-1].distributions.items()}
+            filepath = self.results_dir + distr_file
+            f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "w")
+            json_file = json.dump(distributions, f, indent=4)
+            print("Study stored!")
 
         if not self.double_output:
             if show_best:
@@ -263,7 +275,6 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     model_name1 = "projection_resnet101_optuna_mcc"
-    model_name1 = "test"
     selected_segments1 = None
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
@@ -275,13 +286,15 @@ if __name__ == "__main__":
                                            selected_segments=selected_segments1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+    #test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+    #                                      selected_segments=selected_segments1)
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                           selected_segments=selected_segments1)
 
     # Define Optuna model
-    n_trials1 = 16
+    n_trials1 = 1
     output_metric1 = "mcc"
-    double_output1 = False#True
+    double_output1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1, projection_dataset=True,
