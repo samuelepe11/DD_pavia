@@ -20,8 +20,8 @@ from Enumerators.NetType import NetType
 class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
-                 n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1",
-                 double_output=False):
+                 n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
+                 search_for_untracked_models=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -36,6 +36,9 @@ class OptunaParamFinder:
 
         self.output_metric = output_metric
         self.double_output = double_output
+
+        self.best_trials = []
+        self.current_trainer = None
 
         self.results_dir = working_dir + XrayDataset.results_fold + XrayDataset.models_fold
         if s3 is None:
@@ -66,55 +69,60 @@ class OptunaParamFinder:
                              for k, v in distributions.items()}
 
             # CSV-stored models
-            df = pd.read_csv(self.results_dir + "optuna_study_results.csv")
-            for _, row in df.iterrows():
-                if row["state"] == "RUNNING":
-                    continue
-                params = row.filter(like="params_").to_dict()
-                params = {k.replace("params_", ""): v for k, v in params.items()}
-                self.counter += 1
-                for k, v in params.items():
-                    if k != "optimizer" and k!= "use_batch_norm":
-                        params.update({k: int(v)})
-                self.insert_trial(row, params, distributions)
-            print("CSV-stored models inserted!")
+            try:
+                df = pd.read_csv(self.results_dir + "optuna_study_results.csv")
+                for _, row in df.iterrows():
+                    if row["state"] == "RUNNING":
+                        continue
+                    params = row.filter(like="params_").to_dict()
+                    params = {k.replace("params_", ""): v for k, v in params.items()}
+                    self.counter += 1
+                    for k, v in params.items():
+                        if k != "optimizer" and k!= "use_batch_norm":
+                            params.update({k: int(v)})
+                    self.insert_trial(row, params, distributions)
+                print("CSV-stored models inserted!")
+            except pd.errors.EmptyDataError as e:
+                print("CSV file empty!")
 
             # Untracked models
-            models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
-            if len(models_present) > 0:
-                max_model_id = np.max([int(name[5:]) for name in models_present])
-                n_untracked_models = max_model_id - self.counter
-                if n_untracked_models > -1:
-                    for i in range(n_untracked_models + 1):
-                        print()
-                        self.counter += 1
-                        trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=self.counter,
-                                                            use_cuda=self.use_cuda, train_data=self.train_data,
-                                                            val_data=self.val_data, test_data=self.test_data,s3=self.s3)
-                        train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
-                                                                               show_cm=False, trial_n=self.counter)
-                        val_output = getattr(val_stats, output_metric)
-                        if double_output:
-                            train_output = getattr(train_stats, output_metric)
+            if search_for_untracked_models:
+                models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
+                if len(models_present) > 0:
+                    max_model_id = np.max([int(name[5:]) for name in models_present])
+                    n_untracked_models = max_model_id - self.counter
+                    if n_untracked_models > -1:
+                        for i in range(n_untracked_models):
+                            print()
+                            self.counter += 1
+                            trainer = NetworkTrainer.load_model(self.working_dir, self.model_name, trial_n=self.counter,
+                                                                use_cuda=self.use_cuda, train_data=self.train_data,
+                                                                val_data=self.val_data, test_data=self.test_data,
+                                                                s3=self.s3, projection_dataset=self.projection_dataset)
+                            train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
+                                                                                   show_cm=False, trial_n=self.counter)
+                            val_output = getattr(val_stats, output_metric)
+                            if double_output:
+                                train_output = getattr(train_stats, output_metric)
 
-                        row = {"number": self.counter + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
-                               "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
-                        if not self.double_output:
-                            row.update({"value": val_output})
-                        else:
-                            row.update({"values_0": val_output, "values_1": train_output})
-                        params = trainer.net_params
-                        params.update({"batch_size":int(math.log2(params["batch_size"])),
-                                       "lr_last":int(-math.log10(params["lr_last"])),
-                                       "n_conv_view_neurons":int(math.log2(params["n_conv_view_neurons"])),
-                                       "n_conv_segment_neurons":int(math.log2(params["n_conv_segment_neurons"])),
-                                       "p_drop":int(params["p_dropout"]*10)})
-                        del params["p_dropout"]
-                        self.insert_trial(row, params, distributions)
-                        print("Untracked model", self.counter, "inserted!")
+                            row = {"number": self.counter + 1, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                                   "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
+                            if not self.double_output:
+                                row.update({"value": val_output})
+                            else:
+                                row.update({"values_0": val_output, "values_1": train_output})
+                            params = trainer.net_params
+                            params.update({"batch_size":int(math.log2(params["batch_size"])),
+                                           "lr_last":int(-math.log10(params["lr_last"])),
+                                           "n_conv_view_neurons":int(math.log2(params["n_conv_view_neurons"])),
+                                           "n_conv_segment_neurons":int(math.log2(params["n_conv_segment_neurons"])),
+                                           "p_drop":int(params["p_dropout"]*10)})
+                            del params["p_dropout"]
+                            self.insert_trial(row, params, distributions)
+                            print("Untracked model", self.counter, "inserted!")
 
     def initialize_study(self):
-        self.study.optimize(lambda trial: self.objective(trial), self.n_trials)
+        self.study.optimize(lambda trial: self.objective(trial), self.n_trials, callbacks=[self.store_best_candidates])
 
     def objective(self, trial):
         # Store previous results
@@ -153,12 +161,15 @@ class OptunaParamFinder:
                                        output_metric=self.output_metric, double_output=self.double_output)
             if self.double_output:
                 val_metric, train_metric = val_metric
+
+            self.current_model = trainer
         except TrialPruned:
             raise
         except Exception as e:
             print(f"An error occurred: {e}")
             val_metric = 0
             train_metric = 0
+
         if not self.double_output:
             return val_metric
         else:
@@ -201,7 +212,7 @@ class OptunaParamFinder:
                 print("Best study:")
                 best_trials = self.study.best_trials
                 for trial in best_trials:
-                    print("Trial ID", trial.number - 1, "- outputs:", trial.values)
+                    print("Trial ID", trial.number, "- outputs:", trial.values)
 
             fig = optuna.visualization.plot_pareto_front(self.study,
                                                          target_names=["Validation metric", "Training metric"])
@@ -269,36 +280,58 @@ class OptunaParamFinder:
                 trial_id=self.counter,
             )
         self.study.add_trial(trial)
+        self.store_best_candidates(None, trial)
+
+    def store_best_candidates(self, study, trial):
+        is_best_candidate = True
+        for past_trial in self.best_trials:
+            if self.double_output:
+                if ((self.double_output and past_trial.values[0] >= trial.values[0]
+                     and past_trial.values[1] >= trial.values[1]) or (not self.double_output
+                                                                      and past_trial.value >= trial.value)):
+                    is_best_candidate = False
+                    break
+
+        if is_best_candidate:
+            if self.double_output:
+                self.best_trials.append(trial)
+            else:
+                self.best_trials = [trial]
+            if self.current_trainer is not None:
+                self.current_trainer.store(trial.trial_id)
+
 
 
 if __name__ == "__main__":
     # Define variables
-    working_dir1 = "./../../"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
     model_name1 = "projection_resnet101_optuna_mcc"
     selected_segments1 = None
     net_type1 = NetType.BASE_RES_NEXT101
-    epochs1 = 200
+    epochs1 = 2
     val_epochs1 = 10
     use_cuda1 = True
+    projection_dataset1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1)
-    #test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
-    #                                      selected_segments=selected_segments1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
                                           selected_segments=selected_segments1)
 
     # Define Optuna model
     n_trials1 = 1
     output_metric1 = "mcc"
     double_output1 = True
+    search_for_untracked_models1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
-                                val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1, projection_dataset=True,
-                                output_metric=output_metric1, double_output=double_output1)
+                                val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
+                                projection_dataset=projection_dataset1, output_metric=output_metric1,
+                                double_output=double_output1, search_for_untracked_models=search_for_untracked_models1)
     # Run search
     optuna1.initialize_study()
 

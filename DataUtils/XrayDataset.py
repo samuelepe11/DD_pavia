@@ -340,12 +340,14 @@ class XrayDataset(Dataset):
             dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored classes
-        if dataset.working_dir == "./../":
-            addon = "./."
-            for attr in dataset.__dict__.keys():
-                val = dataset.__dict__[attr]
-                if isinstance(val, str) and val.startswith("./../"):
-                    dataset.__dict__[attr] = addon + val
+        dataset.working_dir = working_dir
+        for attr in dataset.__dict__.keys():
+            val = dataset.__dict__[attr]
+            if isinstance(val, str):
+                if val.startswith("./../../"):
+                    dataset.__dict__[attr] = working_dir + val[8:]
+                elif val.startswith("./../"):
+                    dataset.__dict__[attr] = working_dir + val[5:]
         dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored files

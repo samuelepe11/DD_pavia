@@ -193,7 +193,8 @@ class NetworkTrainer:
                         plt.show()
 
                     # Store intermediate result
-                    self.save_model(trial_n)
+                    if trial_n is None:
+                        self.save_model()
 
                 if trial is not None and not double_output:
                     trial.report(val_stats.f1, epoch)
@@ -215,7 +216,8 @@ class NetworkTrainer:
             duration = self.end_time - self.start_time
             print("Execution time:", round(duration / 60, 4), "min")
 
-        self.save_model(trial_n)
+        if trial_n is None:
+            self.save_model()
         if trial_n is not None:
             train_stats, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False,
                                                                 trial_n=trial_n)
@@ -414,7 +416,7 @@ class NetworkTrainer:
         if trial_n is None:
             addon = self.model_name
         else:
-            addon = "trial_" + str(trial_n - 1)
+            addon = "trial_" + str(trial_n)
             
         filepath = self.results_dir + addon + ".pt"
         if self.s3 is not None:
@@ -629,7 +631,7 @@ class NetworkTrainer:
 
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
-                   s3=None):
+                   projection_dataset=False, s3=None):
         file_name = model_name if trial_n is None else "trial_" + str(trial_n)
         print("Loading " + file_name + "...")
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
@@ -641,7 +643,8 @@ class NetworkTrainer:
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
-                                         net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3)
+                                         net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
+                                         projection_dataset=projection_dataset)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         # Handle models created with Optuna
@@ -699,15 +702,17 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    model_name1 = "projection_resnet101"
+    working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
+    model_name1 = "projection_resnet101_optuna_mcc"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 100
     preprocess_inputs1 = True
-    trial_n1 = None
+    trial_n1 = 55
     val_epochs1 = 10
-    use_cuda1 = False
+    use_cuda1 = True
     assess_calibration1 = True
-    show_test1 = False
+    show_test1 = True
+    projection_dataset1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
@@ -722,17 +727,17 @@ if __name__ == "__main__":
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
-                              use_cuda=use_cuda1, projection_dataset=True)
+                              use_cuda=use_cuda1, projection_dataset=projection_dataset1)
 
     # Train model
-    trainer1.train(show_epochs=True)
+    '''trainer1.train(show_epochs=True)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
+                                   assess_calibration=assess_calibration1)'''
     
     # Evaluate model
     print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
-                                         test_data=test_data1)
+                                         test_data=test_data1, projection_dataset=projection_dataset1)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
                                    assess_calibration=assess_calibration1)
