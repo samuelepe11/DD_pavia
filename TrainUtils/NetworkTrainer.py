@@ -471,7 +471,7 @@ class NetworkTrainer:
                 plt.savefig(filepath)
                 plt.close()
             if trial_n is not None:
-                filepath = self.results_dir + "trial_" + str(trial_n - 1) + "_curves.jpg"
+                filepath = self.results_dir + "trial_" + str(trial_n) + "_curves.jpg"
                 if self.s3 is not None:
                     filepath = self.s3.open(filepath, "wb")
                 plt.savefig(filepath)
