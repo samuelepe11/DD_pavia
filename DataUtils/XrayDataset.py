@@ -6,6 +6,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import copy
 from torch.utils.data import Dataset
 
 from DataUtils.PatientInstance import PatientInstance
@@ -325,7 +326,8 @@ class XrayDataset(Dataset):
         return self.__getitem__(ind)
 
     @staticmethod
-    def load_dataset(working_dir, dataset_name, set_type=None, s3=None, selected_segments=None):
+    def load_dataset(working_dir, dataset_name, set_type=None, s3=None, selected_segments=None,
+                     selected_projection=None):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
         file = open(file_path, "rb") if s3 is None else s3.open(file_path, "rb")
         dataset = pickle.load(file)
@@ -338,6 +340,27 @@ class XrayDataset(Dataset):
                 instances = [instance for instance in dataset.dicom_instances if segm in list(instance)[3:]]
             dataset.dicom_instances = instances
             dataset.len = len(dataset.dicom_instances)
+
+        # Select projection
+        if selected_projection is not None:
+            temp_patient_data = []
+            for instance in dataset.patient_data:
+                temp_instance = []
+                temp_segments = []
+                for i, segm in enumerate(instance.pt_data):
+                    temp_segm = [proj for proj in segm if proj[0] == selected_projection]
+                    if len(temp_segm) == 0:
+                        dataset.dicom_instances.remove(f"{instance.id:03}" + instance.segments[i].lower())
+                    else:
+                        temp_instance.append(temp_segm)
+                        try:
+                            temp_segments.append(instance.segments[i])
+                        except IndexError:
+                            print(instance)
+                instance.pt_data = temp_instance
+                instance.segments = temp_segments
+                temp_patient_data.append(instance)
+            dataset.patient_data = temp_patient_data
 
         # Correct mistakes in previously stored classes
         dataset.working_dir = working_dir
@@ -483,7 +506,8 @@ if __name__ == "__main__":
 
     # Load an already split datasets
     dataset_name1 = "xray_dataset_training"
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=["l"])
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
+                                        selected_projection=ProjectionType.LAT)
 
     # Show items
     ind1 = 1

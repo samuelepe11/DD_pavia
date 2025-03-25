@@ -20,6 +20,7 @@ from DataUtils.XrayProjectionDataset import XrayProjectionDataset
 from DataUtils.Preprocessor import Preprocessor
 from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
+from Enumerators.ProjectionType import ProjectionType
 from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
 from Networks.BaseViT import BaseViT
@@ -218,7 +219,7 @@ class NetworkTrainer:
 
         if trial_n is None:
             self.save_model()
-        if trial_n is not None:
+        else:
             train_stats, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False,
                                                                 trial_n=trial_n)
             val_output = getattr(val_stats, output_metric)
@@ -713,11 +714,18 @@ if __name__ == "__main__":
     assess_calibration1 = True
     show_test1 = True
     projection_dataset1 = True
+    selected_segments1 = None
+    selected_projection1 = ProjectionType.LAT
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training")
-    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation")
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+                                           selected_segments=selected_segments1,
+                                           selected_projection=selected_projection1)
+    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
+                                         selected_segments=selected_segments1, selected_projection=selected_projection1)
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+                                          selected_segments=selected_segments1,
+                                          selected_projection=selected_projection1)
 
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,

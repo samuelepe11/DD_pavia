@@ -14,6 +14,7 @@ from datetime import datetime
 from DataUtils.XrayDataset import XrayDataset
 from TrainUtils.NetworkTrainer import NetworkTrainer
 from Enumerators.NetType import NetType
+from Enumerators.ProjectionType import ProjectionType
 
 
 # Class
@@ -302,15 +303,16 @@ class OptunaParamFinder:
             else:
                 self.best_trials = [trial]
             if self.current_trainer is not None:
-                self.current_trainer.store(trial.trial_id)
+                self.current_trainer.save_model(trial.number)
 
 
 if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
-    model_name1 = "vit_optuna_mcc"
+    model_name1 = "lat_only_resnet101_optuna"
     selected_segments1 = None
+    selected_projection1 = ProjectionType.LAT
     net_type1 = NetType.BASE_VIT
     epochs1 = 200
     val_epochs1 = 10
@@ -319,11 +321,13 @@ if __name__ == "__main__":
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
-                                           selected_segments=selected_segments1)
+                                           selected_segments=selected_segments1,
+                                           selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
-                                         selected_segments=selected_segments1)
+                                         selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
-                                          selected_segments=selected_segments1)
+                                          selected_segments=selected_segments1,
+                                          selected_projection=selected_projection1)
 
     # Define Optuna model
     n_trials1 = 10
