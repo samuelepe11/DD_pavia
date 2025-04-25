@@ -341,27 +341,6 @@ class XrayDataset(Dataset):
             dataset.dicom_instances = instances
             dataset.len = len(dataset.dicom_instances)
 
-        # Select projection
-        if selected_projection is not None:
-            temp_patient_data = []
-            for instance in dataset.patient_data:
-                temp_instance = []
-                temp_segments = []
-                for i, segm in enumerate(instance.pt_data):
-                    temp_segm = [proj for proj in segm if proj[0] == selected_projection]
-                    if len(temp_segm) == 0:
-                        dataset.dicom_instances.remove(f"{instance.id:03}" + instance.segments[i].lower())
-                    else:
-                        temp_instance.append(temp_segm)
-                        try:
-                            temp_segments.append(instance.segments[i])
-                        except IndexError:
-                            print(instance)
-                instance.pt_data = temp_instance
-                instance.segments = temp_segments
-                temp_patient_data.append(instance)
-            dataset.patient_data = temp_patient_data
-
         # Correct mistakes in previously stored classes
         dataset.working_dir = working_dir
         for attr in dataset.__dict__.keys():
@@ -415,6 +394,27 @@ class XrayDataset(Dataset):
                 datum.pt_data[3].append(datum.pt_data[2][2])
                 datum.pt_data[3].append(datum.pt_data[2][3])
                 datum.pt_data[2] = datum.pt_data[2][:2]
+
+        # Select projection
+        if selected_projection is not None:
+            temp_patient_data = []
+            for instance in dataset.patient_data:
+                temp_instance = []
+                temp_segments = []
+                for i, segm in enumerate(instance.pt_data):
+                    temp_segm = [proj for proj in segm if proj[0] == selected_projection]
+                    temp_instance_name = f"{instance.id:03}" + instance.segments[i].lower()
+                    if len(temp_segm) == 0:
+                        if temp_instance_name in dataset.dicom_instances:
+                            dataset.dicom_instances.remove(f"{instance.id:03}" + instance.segments[i].lower())
+                    else:
+                        temp_instance.append(temp_segm)
+                        temp_segments.append(instance.segments[i])
+                instance.pt_data = temp_instance
+                instance.segments = temp_segments
+                temp_patient_data.append(instance)
+            dataset.patient_data = temp_patient_data
+            dataset.len = len(dataset.patient_data)
 
         if set_type is not None:
             dataset.define_set_type(set_type)

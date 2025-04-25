@@ -310,14 +310,14 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
-    model_name1 = "lat_only_resnet101_optuna"
-    selected_segments1 = None
-    selected_projection1 = ProjectionType.LAT
+    model_name1 = "lumbar_only_vit_optuna"
+    selected_segments1 = "l"
+    selected_projection1 = None
     net_type1 = NetType.BASE_VIT
-    epochs1 = 200
+    epochs1 = 500
     val_epochs1 = 10
     use_cuda1 = True
-    projection_dataset1 = False
+    projection_dataset1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -330,7 +330,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 10
+    n_trials1 = 20
     output_metric1 = "mcc"
     double_output1 = True
     search_for_untracked_models1 = False

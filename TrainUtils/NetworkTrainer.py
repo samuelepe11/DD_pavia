@@ -704,11 +704,11 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
-    model_name1 = "projection_resnet101_optuna_mcc"
+    model_name1 = "lat_only_resnet101_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 100
     preprocess_inputs1 = True
-    trial_n1 = 55
+    trial_n1 = 17
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
