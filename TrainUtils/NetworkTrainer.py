@@ -333,7 +333,7 @@ class NetworkTrainer:
         if self.use_cuda:
             self.criterion = self.criterion.cuda()
 
-        _, loader, _ = self.select_dataset(set_type)
+        data, loader, _ = self.select_dataset(set_type)
 
         # Store class labels
         y_prob = []
@@ -377,11 +377,12 @@ class NetworkTrainer:
         if assess_calibration:
             if len(y_prob.shape) == 1:
                 y_prob = np.concatenate([y_prob, 1 - y_prob], axis=1)
-            stats_holder.calibration_results = self.assess_calibration(y_true, y_prob, y_pred, set_type)
+            stats_holder.calibration_results = self.assess_calibration(y_true, y_prob, y_pred, set_type,
+                                                                       descr=data.dicom_instances)
 
         return stats_holder
 
-    def assess_calibration(self, y_true, y_prob, y_pred, set_type):
+    def assess_calibration(self, y_true, y_prob, y_pred, set_type, descr=None):
         y_true = y_true.cpu().numpy()
         y_prob = y_prob.cpu().numpy()
         y_pred = y_pred.cpu().numpy()
@@ -390,6 +391,10 @@ class NetworkTrainer:
         # Store results file
         data = np.concatenate((y_true[:, np.newaxis], y_pred[:, np.newaxis], y_prob), axis=1)
         titles = ["y_true", "y_pred"] + ["y_prob" + str(i) for i in range(y_prob.shape[1])]
+        if descr is not None:
+            descr = np.asarray(descr)
+            data = np.concatenate((descr[:, np.newaxis], data), axis=1)
+            titles = ["descr"] + titles
         df = DataFrame(data, columns=titles)
         filepath = self.results_dir + set_type.value + "_classification_results.csv"
         if self.s3 is not None:
@@ -703,8 +708,8 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
-    model_name1 = "lat_only_resnet101_optuna"
+    # working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
+    model_name1 = "lat_only_projection_resnet101_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 100
     preprocess_inputs1 = True
@@ -745,7 +750,7 @@ if __name__ == "__main__":
     # Evaluate model
     print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
-                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
+                                         use_cuda=use_cuda1, train_data=val_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
                                    assess_calibration=assess_calibration1)
