@@ -21,6 +21,7 @@ class XrayDataset(Dataset):
     results_fold = "results/"
     models_fold = "models/"
     preliminary_fold = "preliminary_analysis/"
+    jai_fold = "jai_results/"
     info_names = ["id", "sex", "birth", "segments", "projections", "spondylarthrosis_present", "label",
                   "fracture_position", "clinical_report", "ct_present", "ct_date", "ct_report", "mri_present",
                   "mri_date", "mri_report", "notes"]
@@ -34,6 +35,7 @@ class XrayDataset(Dataset):
         self.data_dir = working_dir + self.data_fold
         self.results_dir = working_dir + self.results_fold
         self.preliminary_dir = self.results_dir + self.preliminary_fold
+        self.jai_dir = self.results_dir + self.jai_fold
 
         self.info_file_path = None
         self.dicom_folder_path = None

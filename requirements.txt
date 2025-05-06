@@ -155,7 +155,7 @@ SQLAlchemy==2.0.31
 stack-data==0.6.3
 starlette==0.37.2
 statsmodels==0.14.4
-sympy==1.12
+sympy==1.14
 tbb==2021.12.0
 tenacity @ file:///C:/b/abs_d2_havtscu/croot/tenacity_1721222514290/work
 terminado==0.18.1

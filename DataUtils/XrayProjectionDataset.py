@@ -23,12 +23,7 @@ class XrayProjectionDataset(XrayDataset):
         segment_data, extra = super().__getitem__(instance_ind)
         pt_id, segment_id = extra
 
-        try:
-            return [segment_data[int(proj_ind)]], (pt_id, segment_id)
-        except IndexError:
-            print(proj_ind)
-            print(len(segment_data))
-            print(projection_name)
+        return [segment_data[int(proj_ind)]], (pt_id, segment_id)
 
     def __len__(self):
         return self.len

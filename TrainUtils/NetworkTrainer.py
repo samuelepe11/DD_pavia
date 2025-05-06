@@ -229,32 +229,17 @@ class NetworkTrainer:
             else:
                 return val_output
 
-    def apply_network(self, net, instance, set_type):
+    def apply_network(self, net, instance, set_type, return_inputs=False):
         item, extra = instance
+        projection_type_batch, projection_batch, _ = item
+        input = NetworkTrainer.preprocess_fn(projection_batch, self, projection_type_batch, extra, set_type)
+
         y = (item[-1] != "").astype(int)
         y = torch.tensor(np.array(y)).to(torch.float32)
         y = y.unsqueeze(1)
         y = y.to(self.device)
 
-        projection_type_batch, projection_batch, _ = item
-        adjusted_projection = []
-        for i in range(projection_type_batch.shape[0]):
-            projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
-            projection_list = [x[0] for x in projection_list]
-            projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
-                                                            set_type=set_type, preprocess=self.preprocess_inputs)
-            temp = []
-            for j in range(len(projections)):
-                projection = projections[j]
-                projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
-                                                          show=False)
-                projection = torch.tensor(projection, dtype=torch.float32)
-                temp.append(projection)
-            adjusted_projection.append(temp)
-
         # Loss evaluation
-        input = np.stack(adjusted_projection)
-        input = torch.from_numpy(input)
         output = net(input, extra[1], projection_type_batch, self.n_parallel_gpu)
         loss = self.criterion(output, y)
 
@@ -377,8 +362,9 @@ class NetworkTrainer:
         if assess_calibration:
             if len(y_prob.shape) == 1:
                 y_prob = np.concatenate([y_prob, 1 - y_prob], axis=1)
-            stats_holder.calibration_results = self.assess_calibration(y_true, y_prob, y_pred, set_type,
-                                                                       descr=data.dicom_instances)
+
+            descr = data.dicom_instances if not self.projection_dataset else data.dicom_projection_instances
+            stats_holder.calibration_results = self.assess_calibration(y_true, y_prob, y_pred, set_type, descr=descr)
 
         return stats_holder
 
@@ -515,6 +501,27 @@ class NetworkTrainer:
                 print(" > " + attr, "-" * (20 - len(attr)), val)
 
     @staticmethod
+    def preprocess_fn(projection_batch, trainer, projection_type_batch, extra, set_type):
+        adjusted_projection = []
+        for i in range(projection_type_batch.shape[0]):
+            projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
+            projection_list = [x[0] for x in projection_list]
+            projections = trainer.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
+                                                               set_type=set_type, preprocess=trainer.preprocess_inputs)
+            temp = []
+            for j in range(len(projections)):
+                projection = projections[j]
+                projection = trainer.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
+                                                             show=False)
+                projection = torch.tensor(projection, dtype=torch.float32)
+                temp.append(projection)
+            adjusted_projection.append(temp)
+
+        input = np.stack(adjusted_projection)
+        input = torch.from_numpy(input)
+        return input
+
+    @staticmethod
     def custom_collate_fn(batch, img_dim):
         segment_datas = []
         pt_ids = []
@@ -644,7 +651,7 @@ class NetworkTrainer:
                     file_name + ".pt")
         if s3 is not None:
             filepath = s3.open(filepath)
-        checkpoint = torch.load(filepath)
+        checkpoint = torch.load(filepath, weights_only=False)
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
@@ -708,7 +715,7 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "lat_only_projection_resnet101_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 100
@@ -750,7 +757,7 @@ if __name__ == "__main__":
     # Evaluate model
     print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
-                                         use_cuda=use_cuda1, train_data=val_data1, val_data=val_data1,
+                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
                                    assess_calibration=assess_calibration1)
