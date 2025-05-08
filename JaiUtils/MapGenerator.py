@@ -1,5 +1,8 @@
 # Import packages
 import os
+
+from flatbuffers.flexbuffers import Object
+
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 import torch
 torch.use_deterministic_algorithms(True)
@@ -10,9 +13,7 @@ from sklearn.metrics import f1_score, matthews_corrcoef
 from signal_grad_cam import TorchCamBuilder
 
 from Enumerators.SetType import SetType
-from Enumerators.ProjectionType import ProjectionType
 from DataUtils.XrayDataset import XrayDataset
-from DataUtils.PatientInstance import PatientInstance
 from TrainUtils.NetworkTrainer import NetworkTrainer
 
 
@@ -45,11 +46,12 @@ class MapGenerator:
                                                  test_data=self.test_data, projection_dataset=projection_dataset)
 
         # Assess model
-        self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
-        self.aggregate_evals()
+        '''self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
+        self.aggregate_evals()'''
 
         # Define CAM builder
-        self.cam_builder = TorchCamBuilder(model=self.trainer.net, transform_fn=NetworkTrainer.preprocess_fn,
+        model = self.trainer.net.to("cuda")
+        self.cam_builder = TorchCamBuilder(model=model, transform_fn=MapGenerator.preprocess_fn,
                                            class_names=self.train_data.classes, input_transposed=True, use_gpu=use_cuda)
 
     def aggregate_evals(self):
@@ -96,30 +98,26 @@ class MapGenerator:
         all_names = data.dicom_instances if not self.projection_dataset else data.dicom_projection_instances
 
         # Request cams
-        for i, instance in enumerate(loader):
+        data_list = []
+        data_labels = []
+        extras1 = []
+        projection_types = []
+        extra_preprocess_inputs_list = []
+        for i, instance in enumerate(data):
             item, extra = instance
-            projection_type_batch, projection_batch, _ = item
-            data_list = list(projection_batch[np.newaxis, :, :, :])
-            data_labels = list((item[-1] != "").astype(int))
-            extra_preprocess_inputs_list = [self.trainer, projection_type_batch, extra, set_type]
-            extra_inputs_list = [extra[1], projection_type_batch]
-            data_names = all_names[i * self.trainer.net_params["batch_size"] : (i + 1) * self.trainer.net_params["batch_size"]]
+            extras1.append(extra[1])
+            projection_type, projection, _ = item[0]
+            data_list.append(projection[np.newaxis, :, :])
+            projection_types.append(projection_type)
+            data_labels.append(int((item[0][-1] != "")))
+            extra_preprocess_inputs_list.append([self.trainer, projection_type, extra, set_type])
+        extra_inputs_list = [extras1, projection_types]
 
-            # Get shapes
-            data_shape_list = []
-            for name in data_names:
-                instance_name, ind = name.split("_")
-                pt_id, segment_id = PatientInstance.get_patient_and_segment(instance_name)
-                pt_instance = data.get_patient(pt_id)
-                segment_data = pt_instance.get_segment_images(segment_id=segment_id)
-                data_shape_list.append(segment_data[int(ind)][1].shape)
-
-            # Get CAMs
-            self.cam_builder.get_cam(data_list, data_labels, target_classes, explainer_types, target_layers,
-                                     softmax_final=True, data_names=data_names, results_dir_path=self.jai_dir,
-                                     data_shape_list=data_shape_list,
-                                     extra_preprocess_inputs_list=extra_preprocess_inputs_list,
-                                     extra_inputs_list=extra_inputs_list)
+        # Get CAMs
+        self.cam_builder.get_cam(data_list, data_labels, target_classes, explainer_types, target_layers,
+                                 softmax_final=True, data_names=all_names, results_dir_path=self.jai_dir,
+                                 extra_preprocess_inputs_list=extra_preprocess_inputs_list,
+                                 extra_inputs_list=extra_inputs_list)
 
     @staticmethod
     def majority_vote(x):
@@ -136,6 +134,15 @@ class MapGenerator:
     def worst_case_vote(x, mode):
         ref = 1 if mode == "pessimistic" else 0
         return int((x == ref).any())
+
+    @staticmethod
+    def preprocess_fn(item, trainer, projection_type, extra, set_type):
+        projection_batch = item[np.newaxis, :, :, :]
+        projection_type_batch = np.array([projection_type], dtype=Object)
+        extra = [[extra_element] for extra_element in extra]
+        input = trainer.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
+
+        return input[0]
 
 # Main
 if __name__ == "__main__":

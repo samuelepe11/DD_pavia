@@ -241,7 +241,7 @@ class Preprocessor:
             plt.close()
         return mask
 
-    def mask_projection(self, projections, extra_info, set_type, preprocess=False):
+    def mask_projection(self, projections, extra_info, set_type, preprocess=False, projection_id=None):
         pt_id, segm_id = extra_info
         instance_name = f"{pt_id:03d}" + segm_id.lower()
 
@@ -254,7 +254,8 @@ class Preprocessor:
                     if preprocess:
                         projection = self.preprocess(img=projection, segm=segm_id, downsampling_iterates=None,
                                                      show=False)
-                    filepath = folder + "/projection" + str(i) + ".png"
+                    addon = i if projection_id is None else projection_id
+                    filepath = folder + "/projection" + str(addon) + ".png"
                     if self.s3 is not None:
                         filepath = self.s3.open(filepath, "rb")
                         mask = plt.imread(filepath) * 255

@@ -22,7 +22,7 @@ class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
-                 search_for_untracked_models=False):
+                 search_for_untracked_models=False, enhance_images=True):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -34,6 +34,7 @@ class OptunaParamFinder:
         self.use_cuda = use_cuda
         self.n_parallel_gpu = n_parallel_gpu
         self.projection_dataset = projection_dataset
+        self.enhance_images = enhance_images
 
         self.output_metric = output_metric
         self.double_output = double_output
@@ -159,7 +160,8 @@ class OptunaParamFinder:
                                      train_data=self.train_data, val_data=self.val_data, test_data=self.test_data,
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
                                      net_params=params, use_cuda=self.use_cuda, s3=self.s3,
-                                     n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset)
+                                     n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset,
+                                     enhance_images=self.enhance_images)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                        output_metric=self.output_metric, double_output=self.double_output)
             print("Value:", val_metric)
@@ -309,15 +311,16 @@ class OptunaParamFinder:
 if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
-    working_dir1 = "/media/admin/maxone/DonaldDuck_Pavia/"
-    model_name1 = "lumbar_only_vit_optuna"
-    selected_segments1 = "l"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "projection_vit_optuna_no_enhance"
+    selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_VIT
     epochs1 = 500
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
+    enhance_images1 = False
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -330,7 +333,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 20
+    n_trials1 = 10
     output_metric1 = "mcc"
     double_output1 = True
     search_for_untracked_models1 = False
@@ -338,7 +341,8 @@ if __name__ == "__main__":
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                 projection_dataset=projection_dataset1, output_metric=output_metric1,
-                                double_output=double_output1, search_for_untracked_models=search_for_untracked_models1)
+                                double_output=double_output1, search_for_untracked_models=search_for_untracked_models1,
+                                enhance_images=enhance_images1)
     # Run search
     optuna1.initialize_study()
 

@@ -23,7 +23,7 @@ class XrayProjectionDataset(XrayDataset):
         segment_data, extra = super().__getitem__(instance_ind)
         pt_id, segment_id = extra
 
-        return [segment_data[int(proj_ind)]], (pt_id, segment_id)
+        return [segment_data[int(proj_ind)]], (pt_id, segment_id, int(proj_ind))
 
     def __len__(self):
         return self.len

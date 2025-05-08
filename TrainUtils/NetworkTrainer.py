@@ -33,7 +33,7 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False):
+                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -78,6 +78,7 @@ class NetworkTrainer:
         self.convergence_thresh = convergence_thresh
         self.convergence_patience = convergence_patience
         self.preprocess_inputs = preprocess_inputs
+        self.enhance_images = enhance_images
 
         self.start_time = None
         self.end_time = None
@@ -229,10 +230,10 @@ class NetworkTrainer:
             else:
                 return val_output
 
-    def apply_network(self, net, instance, set_type, return_inputs=False):
+    def apply_network(self, net, instance, set_type):
         item, extra = instance
         projection_type_batch, projection_batch, _ = item
-        input = NetworkTrainer.preprocess_fn(projection_batch, self, projection_type_batch, extra, set_type)
+        input = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
 
         y = (item[-1] != "").astype(int)
         y = torch.tensor(np.array(y)).to(torch.float32)
@@ -500,21 +501,29 @@ class NetworkTrainer:
             if issubclass(type(val), nn.Module):
                 print(" > " + attr, "-" * (20 - len(attr)), val)
 
-    @staticmethod
-    def preprocess_fn(projection_batch, trainer, projection_type_batch, extra, set_type):
+    def preprocess_fn(self, projection_batch, projection_type_batch, extra, set_type):
         adjusted_projection = []
         for i in range(projection_type_batch.shape[0]):
             projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
             projection_list = [x[0] for x in projection_list]
-            projections = trainer.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
-                                                               set_type=set_type, preprocess=trainer.preprocess_inputs)
-            temp = []
-            for j in range(len(projections)):
-                projection = projections[j]
-                projection = trainer.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
-                                                             show=False)
-                projection = torch.tensor(projection, dtype=torch.float32)
-                temp.append(projection)
+            try:
+                projection_id = extra[2][i]
+            except IndexError:
+                projection_id = None
+
+            projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
+                                                            set_type=set_type, preprocess=self.preprocess_inputs,
+                                                            projection_id=projection_id)
+
+            if self.enhance_images:
+                temp = []
+                for j in range(len(projections)):
+                    projection = projections[j]
+                    projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
+                                                              show=False)
+                    temp.append(projection)
+                projections = temp
+            temp = [torch.tensor(projection, dtype=torch.float32) for projection in projections]
             adjusted_projection.append(temp)
 
         input = np.stack(adjusted_projection)
@@ -526,8 +535,13 @@ class NetworkTrainer:
         segment_datas = []
         pt_ids = []
         segment_ids = []
+        proj_ids = []
         for segment_data, extra_info in batch:
-            pt_id, segment_id = extra_info
+            try:
+                pt_id, segment_id = extra_info
+            except ValueError:
+                pt_id, segment_id, proj_id = extra_info
+                proj_ids.append(proj_id)
             segment_datas.append(segment_data)
             pt_ids.append(pt_id)
             segment_ids.append(segment_id)
@@ -562,8 +576,8 @@ class NetworkTrainer:
             batch_descr.append(segment_data[0][2])
         segment_datas = (np.stack(batch_proj_id, dtype=object), np.stack(batch_img), np.stack(batch_descr,
                                                                                               dtype=object))
-
-        return segment_datas, (pt_ids, segment_ids)
+        extra = (pt_ids, segment_ids) if len(proj_ids) == 0 else (pt_ids, segment_ids, proj_ids)
+        return segment_datas, extra
 
     @staticmethod
     def compute_binary_confusion_matrix(y_true, y_predicted, classes=None):
@@ -660,6 +674,9 @@ class NetworkTrainer:
                                          projection_dataset=projection_dataset)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
+        if not hasattr(network_trainer, "enhance_images"):
+            network_trainer.enhance_images = True
+
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
             old_model_name = network_trainer.model_name
@@ -728,6 +745,7 @@ if __name__ == "__main__":
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = ProjectionType.LAT
+    enhance_images1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -747,7 +765,7 @@ if __name__ == "__main__":
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
-                              use_cuda=use_cuda1, projection_dataset=projection_dataset1)
+                              use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1)
 
     # Train model
     '''trainer1.train(show_epochs=True)
