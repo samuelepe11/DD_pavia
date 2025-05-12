@@ -196,7 +196,7 @@ class OptunaParamFinder:
                              self.study.trials[-1].distributions.items()}
             filepath = self.results_dir + distr_file
             f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "w")
-            json_file = json.dump(distributions, f, indent=4)
+            _ = json.dump(distributions, f, indent=4)
             print("Study stored!")
 
         if not self.double_output:
@@ -312,7 +312,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "projection_vit_optuna_no_enhance"
+    model_name1 = "projection_vit_optuna_enhance"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_VIT
@@ -320,7 +320,7 @@ if __name__ == "__main__":
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
-    enhance_images1 = False
+    enhance_images1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -333,7 +333,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 10
+    n_trials1 = 15
     output_metric1 = "mcc"
     double_output1 = True
     search_for_untracked_models1 = False

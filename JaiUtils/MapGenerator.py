@@ -108,9 +108,11 @@ class MapGenerator:
             extras1.append(extra[1])
             projection_type, projection, _ = item[0]
             data_list.append(projection[np.newaxis, :, :])
-            projection_types.append(projection_type)
+            projection_types.append([projection_type])
             data_labels.append(int((item[0][-1] != "")))
             extra_preprocess_inputs_list.append([self.trainer, projection_type, extra, set_type])
+            if i==1:
+                break
         extra_inputs_list = [extras1, projection_types]
 
         # Get CAMs
