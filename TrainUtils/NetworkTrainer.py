@@ -425,14 +425,14 @@ class NetworkTrainer:
     def summarize_performance(self, show_test=False, show_process=False, show_cm=False, trial_n=None,
                               assess_calibration=False):
         # Show final losses
-        train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
+        '''train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
         print("Training loss = " + str(np.round(train_stats.loss, 5)) + " - Training accuracy = " +
               str(np.round(train_stats.acc * 100, 7)) + "% - Training F1-score = " +
               str(np.round(train_stats.f1 * 100, 7)) + "%")
 
         NetworkTrainer.show_performance_table(train_stats, "training")
         if assess_calibration:
-            NetworkTrainer.show_calibration_table(train_stats, "training")
+            NetworkTrainer.show_calibration_table(train_stats, "training")'''
 
         print()
         val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration)
@@ -470,7 +470,7 @@ class NetworkTrainer:
                 plt.savefig(filepath)
                 plt.close()
 
-        return train_stats, val_stats
+        return val_stats#train_stats, val_stats
 
     def draw_training_curves(self):
         plt.close()
@@ -501,7 +501,7 @@ class NetworkTrainer:
             if issubclass(type(val), nn.Module):
                 print(" > " + attr, "-" * (20 - len(attr)), val)
 
-    def preprocess_fn(self, projection_batch, projection_type_batch, extra, set_type):
+    def preprocess_fn(self, projection_batch, projection_type_batch, extra, set_type, max_proj_num=None):
         adjusted_projection = []
         for i in range(projection_type_batch.shape[0]):
             projection_list = np.split(projection_batch[i], projection_batch.shape[1], axis=0)
@@ -526,9 +526,13 @@ class NetworkTrainer:
             temp = [torch.tensor(projection, dtype=torch.float32) for projection in projections]
             adjusted_projection.append(temp)
 
+        if max_proj_num is not None and max_proj_num > len(adjusted_projection[0]):
+            h, w = adjusted_projection[0][-1].shape
+            adjusted_projection[0] += [torch.zeros(h, w)] * (max_proj_num - len(adjusted_projection[0]))
+
         input = np.stack(adjusted_projection)
         input = torch.from_numpy(input)
-        return input
+        return input[0]
 
     @staticmethod
     def custom_collate_fn(batch, img_dim):
@@ -732,19 +736,19 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "lat_only_projection_resnet101_optuna"
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "resnext101_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 100
     preprocess_inputs1 = True
-    trial_n1 = 17
+    trial_n1 = 14
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
     show_test1 = True
-    projection_dataset1 = True
+    projection_dataset1 = False
     selected_segments1 = None
-    selected_projection1 = ProjectionType.LAT
+    selected_projection1 = None
     enhance_images1 = True
 
     # Load data

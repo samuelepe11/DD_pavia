@@ -82,7 +82,7 @@ class ConvBaseNetwork(nn.Module):
         fc_list.append(nn.Sigmoid())
         self.fc = nn.Sequential(*fc_list)
 
-    def forward(self, x, segment_ids, view_ids, n_parallel_gpu=0):
+    def forward(self, x, segment_ids, view_ids, avoid_sigmoid=False, n_parallel_gpu=0):
         batch_size, n_channels, height, width = x.shape
         if n_parallel_gpu > 1:
             current_device = torch.cuda.current_device()
@@ -117,16 +117,21 @@ class ConvBaseNetwork(nn.Module):
         gap_output = torch.mean(x_processed, dim=(-2, -1))
 
         # Average across all channels to aggregate information
-        channel_avg = torch.mean(gap_output, dim=1)
+        gap_output = torch.mean(gap_output, dim=1)
 
         # Pass through final fully connected layer
-        out = self.fc(channel_avg)
+        if avoid_sigmoid:
+            out = gap_output
+            for layer in list(self.fc.children())[:-1]:
+                out = layer(out)
+        else:
+            out = self.fc(gap_output)
         return out
 
     def apply_convolutional_branches(self, x, batch_size, n_channels, segment_ids, view_ids):
         # Segment-specific processing
-        segment_processed = torch.zeros(batch_size * n_channels, self.conv_segment_sizes[-1],
-                                        x.shape[-2], x.shape[-1], device=x.device)
+        segment_processed = torch.zeros(batch_size * n_channels, self.conv_segment_sizes[-1], x.shape[-2], x.shape[-1],
+                                        device=x.device)
         for i in range(len(XrayDataset.segment_dict)):
             segment_type = XrayDataset.segment_id_list[i]
             mask = torch.tensor([True if segm_id == segment_type else False for segm_id in segment_ids])
@@ -137,8 +142,8 @@ class ConvBaseNetwork(nn.Module):
             segment_processed = segment_processed.contiguous()
 
         # View-specific processing
-        view_processed = torch.zeros(batch_size * n_channels, self.conv_view_sizes[-1],
-                                     segment_processed.shape[-2], segment_processed.shape[-1], device=x.device)
+        view_processed = torch.zeros(batch_size * n_channels, self.conv_view_sizes[-1], segment_processed.shape[-2],
+                                     segment_processed.shape[-1], device=x.device)
         for i in range(len(ProjectionType)):
             view_type = list(ProjectionType)[i]
             mask = torch.tensor([[True if col_val == view_type else False for col_val in row] for row in view_ids])
