@@ -128,7 +128,7 @@ class MapGenerator:
         original_imgs = []
         masks = []
         for i, instance in enumerate(data):
-            if i>8:
+            if i > 2:  # <=8 ###########################
                 continue
             item, extra = instance
             extras1.append(extra[1])
@@ -338,8 +338,8 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "resnext101_optuna"
-    trial_n1 = 14
+    model_name1 = "projection_resnext101_optuna"
+    trial_n1 = 60
     use_cuda1 = False
     projection_dataset1 = True
     selected_segments1 = None
@@ -352,8 +352,8 @@ if __name__ == "__main__":
 
     # Draw maps
     set_type1 = SetType.VAL
-    target_classes1 = [0, 1]
-    explainer_types1 = ["Grad-CAM", "HiResCAM"]
-    target_layers1 = ["feature_extractor.features.7.2.conv3"]
+    target_classes1 = [1]
+    explainer_types1 = ["Grad-CAM"]
+    target_layers1 = ["feature_extractor.features.0"]
     generator1.get_cam(set_type=set_type1, target_classes=target_classes1, explainer_types=explainer_types1,
                        target_layers=target_layers1)

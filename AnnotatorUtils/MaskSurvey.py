@@ -8,6 +8,7 @@ import pytz
 import cv2
 import pandas as pd
 from datetime import datetime
+from gradio_image_annotation import image_annotator
 
 from DataUtils.XrayDataset import XrayDataset
 from DataUtils.PatientInstance import PatientInstance
@@ -25,14 +26,24 @@ class MaskSurvey:
     allow_interaction = gr.update(interactive=True)
     avoid_interaction = gr.update(interactive=False)
     normal_scale_value = 1
+    intro_msg = """
+                # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Evidence-First per Diagnosi e Pianificazione di Terapie
+                #### Dopo aver inserito il tuo nominativo, vedrai in successione delle immagini radiografiche relative a più soggetti: ogni gruppo di immagini rappresenta più proiezioni dello stesso segmento vertebrale di ogni paziente.
+                #### Se è presente una frattura, ti chiediamo di evidenziarla colorando la zona interessata in tutte le immagini dove la frattura risulta effettivamente osservabile (anche se parzialmente). Ti invitiamo a contornare o colorare tale zona con adeguata precisione.
+                #### Qualora la frattura non fosse presente, segnalalo con l'apposito checkbox in fondo alla pagina.\n
+                #### ATTENZIONE! Se la piattaforma dovesse segnalare un errore nel caricamento di una o più componenti (_Error_ sulla componente) oppure un problema di connessione (_Connection errored out._ come pop-up in alto a destra), ciò potrebbe essere legato ad un'instabilità della nostra rete di laboratorio: per risolvere il problema basterà ricaricare la pagina e ripetere l'autenticazione.
+                ### BUON LAVORO!
+                """
+    vertebra_names = []
 
-    def __init__(self, dataset, desired_instances, blur=False, dataset_name=None):
+    def __init__(self, dataset, desired_instances, blur=False, dataset_name=None, is_crop_gui=False):
         self.users = None
         self.dataset = dataset
         if dataset_name is not None:
             self.mask_fold = dataset_name + "_" + self.mask_fold
         self.mask_dir = dataset.data_dir + self.mask_fold
         self.max_projection_number = dataset.max_projection_number()
+        self.is_crop_gui = is_crop_gui
 
         self.desired_instances = desired_instances
         random.shuffle(self.desired_instances)
@@ -54,7 +65,7 @@ class MaskSurvey:
 
             # Store mask
             gt_mask = mask["layers"][0]
-            gt_mask = MaskSurvey.remove_adjust(gt_mask, mask_id, adjust_specifics)
+            gt_mask = self.remove_adjust(gt_mask, mask_id, adjust_specifics)
             fig = plt.figure()
             ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
             ax.axis("off")
@@ -73,12 +84,17 @@ class MaskSurvey:
             ok_flag = False
         return button, name, ok_flag
 
+    def get_val(self, img):
+        return {"background": img, "layers": [], "composite": None} if not self.is_crop_gui else {"image": img,
+                                                                                                  "boxes": []}
+
     def avoid_clear_action(self, count, mask_id, adjust_specifics):
         _, img = self.get_img(mask_id=mask_id, count=count)
 
-        mask = gr.update(value={"background": img, "layers": [], "composite": None})
+        mask = gr.update(value=self.get_val(img))
         bright = self.normal_scale_value
         contrast = self.normal_scale_value
+        adjust_specifics[mask_id, :] = 0
 
         return mask, bright, contrast, adjust_specifics
 
@@ -105,7 +121,7 @@ class MaskSurvey:
         if adjust_specifics[mask_id, 2]:
             img = np.flipud(img)
 
-        mask = gr.update(value={"background": img, "layers": [], "composite": None})
+        mask = gr.update(value=self.get_val(img))
         return mask
 
     def rotate_img(self, bright, contrast, adjust_specifics, count, mask_id):
@@ -141,19 +157,23 @@ class MaskSurvey:
 
         return mask, adjust_specifics
 
-    def get_img(self, mask_id, item=None, count=None, first_display=False):
+    def get_img(self, mask_id, item=None, count=None, first_display=False, return_label=False):
         if first_display:
             projection_id = ProjectionType.AP
-            img = np.zeros((10, 10))
+            img = np.zeros((1000, 1000))
+            label = ""
         else:
             if item is None:
                 item, _ = self.dataset.__getitem__(count)
-            projection_id, img, _ = item[mask_id]
+            projection_id, img, label = item[mask_id]
 
             img = np.int32(img / np.max(img) * 255)
             if self.blur:
                 img = cv2.GaussianBlur(img.astype(np.uint8), (105, 105), 0)
-        return projection_id, img
+        if not return_label:
+            return projection_id, img
+        else:
+            return projection_id, img, label
 
     def next_img(self, count, name, box, ok_flag):
         if count != len(self.desired_instances):
@@ -169,18 +189,50 @@ class MaskSurvey:
                                + "l'inconsistenza, ti chiediamo di comunicarci via mail se le maschere caricate sono "
                                + "errate.")
                 elif box and not ok_flag:
-                    # Create an empty folder for the non-fracture segments
                     img_name = self.desired_instances[count]
-                    pt_folder = self.mask_dir + name
-                    if img_name not in os.listdir(pt_folder):
-                        os.mkdir(pt_folder + "/" + img_name)
+                    if not self.is_crop_gui:
+                        # Create an empty folder for the non-fracture segments
+                        pt_folder = self.mask_dir + name
+                        if img_name not in os.listdir(pt_folder):
+                            os.mkdir(pt_folder + "/" + img_name)
+                    else:
+                        cropping_ref_name = "cropping_ref.csv"
+                        if cropping_ref_name not in os.listdir(self.mask_dir):
+                            cropping_ref = pd.DataFrame(
+                                columns=["file_name", "segment", "projection_id", "projection", "width", "height",
+                                         "vertebra_name", "x_min", "x_max", "y_min", "y_max", "fracture_present", "annotator"])
+                        else:
+                            cropping_ref = pd.read_csv(self.mask_dir + cropping_ref_name)
+
+                        item, _ = self.dataset.__getitem__(count)
+                        for i, element in enumerate(item):
+                            projection_id, img, fracture_pos = element
+                            fig = plt.figure()
+                            ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
+                            ax.axis("off")
+                            plt.imshow(img, "gray")
+                            cropped_img_name = img_name + "_proj" + str(i) + "_all.png"
+                            plt.savefig(self.mask_dir + "/" + cropped_img_name, bbox_inches="tight", pad_inches=0,
+                                        dpi=600)
+                            plt.close(fig)
+
+                            vertebra_name = img_name[-1]
+                            vertebra_name = vertebra_name.upper() if vertebra_name != "s" else "SC"
+                            fracture_present = fracture_pos != ""
+                            row = {"file_name": cropped_img_name, "segment": img_name, "projection": i,
+                                   "projection_type": projection_id.value, "width": img.shape[1], "height": img.shape[0],
+                                   "vertebra_name": vertebra_name, "x_min": 0, "x_max": img.shape[1], "y_min": 0,
+                                   "y_max": img.shape[0], "fracture_present": fracture_present, "annotator": name}
+                            cropping_ref.loc[len(cropping_ref)] = row
+                        cropping_ref.to_csv(self.mask_dir + cropping_ref_name, index=False)
 
                 count += 1
 
         # Get next images
         if count == len(self.desired_instances):
             out_txt = "GRAZIE PER IL TUO CONTRIBUTO! Ora puoi chiudere l'applicazione."
-            mask_blocks = self.max_projection_number * (5 * [self.avoid_interaction] + [self.empty_mask_update] +
+            addon = [gr.update(val="-")] if self.is_crop_gui else []
+            mask_blocks = self.max_projection_number * (5 * [self.avoid_interaction] + addon + [self.empty_mask_update] +
                                                         [gr.update(icon="icons/unchecked.png", interactive=True)])
         else:
             instance = self.desired_instances[count]
@@ -189,18 +241,27 @@ class MaskSurvey:
             item, _ = self.dataset.__getitem__(count)
             mask_blocks = []
             for j in range(self.max_projection_number):
+                addon = []
                 try:
                     projection_id, img = self.get_img(mask_id=j, item=item)
                     label = "Vista: " + projection_id.translated_value()
 
                     # Enable tools and update image
-                    mask_blocks += (5 * [self.allow_interaction] +
-                                    [gr.update(value={"background": img, "layers": [], "composite": None}, label=label,
+                    if self.is_crop_gui:
+                        _, _, frac_pos = item[j]
+                        if frac_pos == "":
+                            frac_pos = "Assente"
+                        addon = [gr.update(value=frac_pos)]
+                    mask_blocks += (5 * [self.allow_interaction] + addon +
+                                    [gr.update(value=self.get_val(img), label=label,
                                                show_label=True, interactive=True)] +
                                     [gr.update(icon="icons/unchecked.png", interactive=True)])
+
                 except IndexError:
                     # Disable tools and update image
-                    mask_blocks += (5 * [self.avoid_interaction] + [self.empty_mask_update] +
+                    if self.is_crop_gui:
+                        addon = [gr.update(value="-")]
+                    mask_blocks += (5 * [self.avoid_interaction] + addon + [self.empty_mask_update] +
                                     [gr.update(icon="icons/unchecked.png", interactive=False)])
 
         adjust_specifics = np.zeros((self.max_projection_number, 3))
@@ -220,16 +281,23 @@ class MaskSurvey:
         if name == "":
             now = datetime.now(tz=pytz.timezone("Europe/Rome"))
             name = "session_" + now.strftime("%m-%d-%Y_%H'%M'%S")
-        pt_folder = self.mask_dir + name
-        if name not in os.listdir(self.mask_dir):
-            os.mkdir(pt_folder)
+        if not self.is_crop_gui:
+            pt_folder = self.mask_dir + name
+            if name not in os.listdir(self.mask_dir):
+                os.mkdir(pt_folder)
 
-        # Assess already evaluated instances
-        annotated_segments = []
-        for instance in self.desired_instances:
-            if instance in os.listdir(pt_folder):
-                annotated_segments.append(instance)
-        count = len(annotated_segments)
+            # Assess already evaluated instances
+            annotated_segments = []
+            for instance in self.desired_instances:
+                if instance in os.listdir(pt_folder):
+                    annotated_segments.append(instance)
+            count = len(annotated_segments)
+
+        else:
+            # Assess already evaluated instances
+            annotated_segments = np.unique([image[:4] for image in os.listdir(self.mask_dir) if image[-3:] == "png"])
+            count = len(annotated_segments)
+
         if count > 0:
             count -= 2
         else:
@@ -249,7 +317,7 @@ class MaskSurvey:
 
         with gr.Tab(label="Annotazione immagini", interactive=False) as tab2:
             # Add segment number
-            txt = gr.Text(value="", show_label=False, max_lines=1)
+            txt = gr.Text(value="", show_label=False, max_lines=1, interactive=False)
             ok_flag = gr.State(False)
 
             # Add image fields
@@ -293,14 +361,24 @@ class MaskSurvey:
                                                    min_width=66)
                             mask_blocks.append(flip_horiz)
 
+                        if self.is_crop_gui:
+                            frac_position = gr.Text(value="", label="Posizione della frattura", max_lines=1)
+                            mask_blocks.append(frac_position)
+
                         # Add image editor
-                        fig = {"background": img, "layers": [], "composite": None}
-                        mask = gr.ImageEditor(value=fig, image_mode="L", sources=None, type="numpy",
-                                              label=label, show_label=show_label, show_download_button=False,
-                                              container=True, interactive=interactive, visible=True,
-                                              show_share_button=False, eraser=gr.Eraser(default_size="auto"),
-                                              brush=gr.Brush(default_size="auto", colors=["#ff0000"], color_mode="fixed"),
-                                              layers=False, transforms=(), elem_id="output_image")
+                        if not self.is_crop_gui:
+                            fig = {"background": img, "layers": [], "composite": None}
+                            mask = gr.ImageEditor(value=fig, image_mode="L", sources=None, type="numpy",
+                                                  label=label, show_label=show_label, show_download_button=False,
+                                                  container=True, interactive=interactive, visible=True,
+                                                  show_share_button=False, eraser=gr.Eraser(default_size="auto"),
+                                                  brush=gr.Brush(default_size="auto", colors=["#ff0000"], color_mode="fixed"),
+                                                  layers=False, transforms=(), elem_id="output_image")
+                        else:
+                            annotator_input = {"image": img, "boxes": []}
+                            mask = image_annotator(value=annotator_input, label_list=self.vertebra_names, show_label=True,
+                                                   interactive=True, label=label, show_download_button=False,
+                                                   box_thickness=1, boxes_alpha=0.3)
                         mask_blocks.append(mask)
 
                         # Add submit button
@@ -347,16 +425,7 @@ class MaskSurvey:
     def build_app(self):
         # Set up the application
         with gr.Blocks(gr.themes.Soft()) as block:
-            gr.Markdown(
-                """
-                # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Basati su Evidenza per Diagnosi e Pianificazione di Terapie
-                #### Dopo aver inserito il tuo nominativo, vedrai in successione delle immagini radiografiche relative a più soggetti: ogni gruppo di immagini rappresenta più proiezioni dello stesso segmento vertebrale di ogni paziente.
-                #### Se è presente una frattura, ti chiediamo di evidenziarla colorando la zona interessata in tutte le immagini dove la frattura risulta effettivamente osservabile (anche se parzialmente). Ti invitiamo a contornare o colorare tale zona con adeguata precisione.
-                #### Qualora la frattura non fosse presente, segnalalo con l'apposito checkbox in fondo alla pagina.\n
-                #### ATTENZIONE! Se la piattaforma dovesse segnalare un errore nel caricamento di una o più componenti (_Error_ sulla componente) oppure un problema di connessione (_Connection errored out._ come pop-up in alto a destra), ciò potrebbe essere legato ad un'instabilità della nostra rete di laboratorio: per risolvere il problema basterà ricaricare la pagina e ripetere l'autenticazione.
-                ### BUON LAVORO!
-                """
-            )
+            gr.Markdown(self.intro_msg)
             self.display_images(block)
 
         # Launch the application
@@ -527,5 +596,3 @@ if __name__ == "__main__":
 
     # Check masks
     survey.check_collected_masks()
-
-    print()
