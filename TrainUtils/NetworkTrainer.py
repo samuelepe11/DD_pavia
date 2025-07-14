@@ -153,14 +153,16 @@ class NetworkTrainer:
                 self.optimizer.zero_grad()
                 loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
                 train_loss += loss.item()
+
                 train_acc += acc.item()
 
                 loss.backward()
                 self.optimizer.step()
 
             train_loss = train_loss / len(self.train_loader)
-            train_acc = train_acc / len(self.train_loader)
             self.train_losses.append(train_loss)
+
+            train_acc = train_acc / len(self.train_loader)
             self.train_accuracies.append(train_acc)
 
             if show_epochs and (epoch % 10 == 0 or epoch % self.val_epochs == 0):
@@ -199,7 +201,7 @@ class NetworkTrainer:
                         self.save_model()
 
                 if trial is not None and not double_output:
-                    trial.report(val_stats.f1, epoch)
+                    trial.report(getattr(val_stats, output_metric), epoch)
                     if trial.should_prune():
                         raise optuna.exceptions.TrialPruned()
 
@@ -425,14 +427,14 @@ class NetworkTrainer:
     def summarize_performance(self, show_test=False, show_process=False, show_cm=False, trial_n=None,
                               assess_calibration=False):
         # Show final losses
-        '''train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
+        train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
         print("Training loss = " + str(np.round(train_stats.loss, 5)) + " - Training accuracy = " +
               str(np.round(train_stats.acc * 100, 7)) + "% - Training F1-score = " +
               str(np.round(train_stats.f1 * 100, 7)) + "%")
 
         NetworkTrainer.show_performance_table(train_stats, "training")
         if assess_calibration:
-            NetworkTrainer.show_calibration_table(train_stats, "training")'''
+            NetworkTrainer.show_calibration_table(train_stats, "training")
 
         print()
         val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration)
@@ -470,28 +472,30 @@ class NetworkTrainer:
                 plt.savefig(filepath)
                 plt.close()
 
-        return val_stats#train_stats, val_stats
+        return train_stats, val_stats
 
-    def draw_training_curves(self):
+    def draw_training_curves(self, is_pretrain=False):
         plt.close()
         plt.figure(figsize=(5, 7))
         plt.suptitle("Training curves")
 
         # Losses
-        plt.subplot(2, 1, 1)
+        if not is_pretrain:
+            plt.subplot(2, 1, 1)
         plt.plot(self.train_losses, "b", label="Training set")
         plt.plot(self.val_eval_epochs, self.val_losses, "g", label="Validation set")
         plt.legend()
         plt.ylabel("Loss")
         plt.xlabel("Epoch")
 
-        # Accuracies
-        plt.subplot(2, 1, 2)
-        plt.plot(self.train_accuracies, "b", label="Training set")
-        plt.plot(self.val_eval_epochs, self.val_accuracies, "g", label="Validation set")
-        plt.legend()
-        plt.ylabel("Accuracy")
-        plt.xlabel("Epoch")
+        if not is_pretrain:
+            # Accuracies
+            plt.subplot(2, 1, 2)
+            plt.plot(self.train_accuracies, "b", label="Training set")
+            plt.plot(self.val_eval_epochs, self.val_accuracies, "g", label="Validation set")
+            plt.legend()
+            plt.ylabel("Accuracy")
+            plt.xlabel("Epoch")
 
     def show_model(self):
         print("MODEL:")

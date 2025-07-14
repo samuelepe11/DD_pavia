@@ -1,9 +1,11 @@
 # Import packages
+import os
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
 import random
 import matplotlib.pyplot as plt
 import gradio as gr
 import numpy as np
-import os
 import pandas as pd
 
 from DataUtils.XrayDataset import XrayDataset
