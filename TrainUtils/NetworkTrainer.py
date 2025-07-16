@@ -30,6 +30,8 @@ from TrainUtils.StatsHolder import StatsHolder
 
 # Class
 class NetworkTrainer:
+    default_net_params = None
+    default_net_type = None
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
@@ -51,16 +53,16 @@ class NetworkTrainer:
         self.use_cuda = torch.cuda.is_available() and use_cuda
         self.device = torch.device("cuda" if self.use_cuda else "cpu")
 
-        self.net_type = net_type
-        self.net_params = net_params
-        if net_type == NetType.BASE_RES_NEXT50:
-            self.net = BaseResNeXt50(params=net_params, device=self.device)
-        elif net_type == NetType.BASE_RES_NEXT101:
-            self.net = BaseResNeXt101(params=net_params, device=self.device)
-        elif net_type == NetType.BASE_VIT:
-            self.net = BaseViT(params=net_params, device=self.device)
-        elif net_type == NetType.ATTENTION_VIT:
-            self.net = AttentionViT(params=net_params, device=self.device)
+        self.net_type = net_type if net_type is not None else self.default_net_type
+        self.net_params = net_params if net_params is not None else self.default_net_params
+        if self.net_type == NetType.BASE_RES_NEXT50:
+            self.net = BaseResNeXt50(params=self.net_params, device=self.device)
+        elif self.net_type == NetType.BASE_RES_NEXT101:
+            self.net = BaseResNeXt101(params=self.net_params, device=self.device)
+        elif self.net_type == NetType.BASE_VIT:
+            self.net = BaseViT(params=self.net_params, device=self.device)
+        elif self.net_type == NetType.ATTENTION_VIT:
+            self.net = AttentionViT(params=self.net_params, device=self.device)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -74,7 +76,7 @@ class NetworkTrainer:
                          "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
                         {"params":  [param for name, param in self.net.named_parameters() if "resnet.7" not in name],
                          "lr": self.net_params["lr_last"]}]
-        self.optimizer = getattr(torch.optim, net_params["optimizer"])(param_groups)
+        self.optimizer = getattr(torch.optim, self.net_params["optimizer"])(param_groups)
         self.convergence_thresh = convergence_thresh
         self.convergence_patience = convergence_patience
         self.preprocess_inputs = preprocess_inputs
@@ -111,7 +113,7 @@ class NetworkTrainer:
 
     def load_data(self, data, shuffle=False):
         if self.use_cuda:
-            num_workers = 8
+            num_workers = 0#
             pin_memory = True
         else:
             num_workers = 0

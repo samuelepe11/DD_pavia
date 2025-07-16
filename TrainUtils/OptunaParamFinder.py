@@ -22,7 +22,8 @@ class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
-                 search_for_untracked_models=False, enhance_images=True, full_size=True):
+                 search_for_untracked_models=False, enhance_images=True, full_size=True, direction="maximize",
+                 is_pretrain=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -55,17 +56,24 @@ class OptunaParamFinder:
 
         self.n_trials = n_trials
         if not self.double_output:
-            self.study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(),
+            self.study = optuna.create_study(direction=direction, sampler=optuna.samplers.TPESampler(),
                                              pruner=optuna.pruners.MedianPruner())
         else:
-            self.study = optuna.create_study(directions=["maximize", "maximize"], sampler=optuna.samplers.TPESampler(),
+            self.study = optuna.create_study(directions=[direction, direction], sampler=optuna.samplers.TPESampler(),
                                              pruner=optuna.pruners.MedianPruner())
         self.counter = 0
 
         # Retrieve previous results
-        file_list = os.listdir(self.results_dir) if self.s3 is None else [x.split("/")[-1] for x in self.s3.ls(self.results_dir)]
-        if "optuna_study_results.csv" in file_list:
-            filepath = self.results_dir + "distributions.json"
+        self.search_for_untracked_models = search_for_untracked_models
+        self.is_pretrain = is_pretrain
+        self.retrieve_previous_results()
+
+    def retrieve_previous_results(self):
+        addon = "" if not self.is_pretrain else "pretrain_"
+        file_list = os.listdir(self.results_dir) if self.s3 is None else [x.split("/")[-1] for x in
+                                                                          self.s3.ls(self.results_dir)]
+        if addon + "optuna_study_results.csv" in file_list:
+            filepath = self.results_dir + addon + "distributions.json"
             f = open(filepath, "r") if self.s3 is None else self.s3.open(filepath, "r")
             distributions = json.load(f)
             distributions = {k: eval(v["name"])(**{key: value for key, value in v.items() if key != "name"})
@@ -73,14 +81,15 @@ class OptunaParamFinder:
 
             # CSV-stored models
             try:
-                df = pd.read_csv(self.results_dir + "optuna_study_results.csv")
+                df = pd.read_csv(self.results_dir + addon + "optuna_study_results.csv")
                 for _, row in df.iterrows():
                     if row["state"] == "RUNNING":
                         continue
                     params = row.filter(like="params_").to_dict()
                     params = {k.replace("params_", ""): v for k, v in params.items()}
                     for k, v in params.items():
-                        if k != "optimizer" and k != "use_batch_norm":
+                        if (k != "optimizer" and k != "use_batch_norm" and k != "beta1" and k != "beta2"
+                                and k != "layer_decay" and k != "scheduler"):
                             params.update({k: int(v)})
                     self.insert_trial(row, params, distributions)
                     self.counter += 1
@@ -89,41 +98,45 @@ class OptunaParamFinder:
                 print("CSV file empty!")
 
             # Untracked models
-            if search_for_untracked_models:
-                models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
-                if len(models_present) > 0:
-                    max_model_id = np.max([int(name[5:]) for name in models_present])
-                    n_untracked_models = max_model_id - self.counter
-                    if n_untracked_models > -1:
-                        for i in range(n_untracked_models):
-                            print()
-                            trainer = NetworkTrainer.load_model(self.working_dir, self.model_name,
-                                                                trial_n=self.counter, use_cuda=self.use_cuda,
-                                                                train_data=self.train_data, val_data=self.val_data,
-                                                                test_data=self.test_data, s3=self.s3,
-                                                                projection_dataset=self.projection_dataset)
-                            train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
-                                                                                   show_cm=False, trial_n=self.counter)
-                            val_output = getattr(val_stats, output_metric)
-                            if double_output:
-                                train_output = getattr(train_stats, output_metric)
+            self.retrieve_untracked_models(distributions)
 
-                            row = {"number": self.counter, "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
-                                   "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
-                            if not self.double_output:
-                                row.update({"value": val_output})
-                            else:
-                                row.update({"values_0": val_output, "values_1": train_output})
-                            params = trainer.net_params
-                            params.update({"batch_size": int(math.log2(params["batch_size"])),
-                                           "lr_last": int(-math.log10(params["lr_last"])),
-                                           "n_conv_view_neurons": int(math.log2(params["n_conv_view_neurons"])),
-                                           "n_conv_segment_neurons": int(math.log2(params["n_conv_segment_neurons"])),
-                                           "p_drop": int(params["p_dropout"]*10)})
-                            del params["p_dropout"]
-                            self.insert_trial(row, params, distributions)
-                            print("Untracked model", self.counter, "inserted!")
-                            self.counter += 1
+    def retrieve_untracked_models(self, distributions):
+        if self.search_for_untracked_models:
+            models_present = [name.strip(".pt") for name in os.listdir(self.results_dir) if ".pt" in name]
+            if len(models_present) > 0:
+                max_model_id = np.max([int(name[5:]) for name in models_present])
+                n_untracked_models = max_model_id - self.counter
+                if n_untracked_models > -1:
+                    for i in range(n_untracked_models):
+                        print()
+                        trainer = NetworkTrainer.load_model(self.working_dir, self.model_name,
+                                                            trial_n=self.counter, use_cuda=self.use_cuda,
+                                                            train_data=self.train_data, val_data=self.val_data,
+                                                            test_data=self.test_data, s3=self.s3,
+                                                            projection_dataset=self.projection_dataset)
+                        train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
+                                                                               show_cm=False, trial_n=self.counter)
+                        val_output = getattr(val_stats, self.output_metric)
+                        if self.double_output:
+                            train_output = getattr(train_stats, self.output_metric)
+
+                        row = {"number": self.counter,
+                               "datetime_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                               "datetime_complete": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
+                        if not self.double_output:
+                            row.update({"value": val_output})
+                        else:
+                            row.update({"values_0": val_output, "values_1": train_output})
+                        params = trainer.net_params
+                        params.update({"batch_size": int(math.log2(params["batch_size"])),
+                                       "lr_last": int(-math.log10(params["lr_last"])),
+                                       "n_conv_view_neurons": int(math.log2(params["n_conv_view_neurons"])),
+                                       "n_conv_segment_neurons": int(math.log2(params["n_conv_segment_neurons"])),
+                                       "p_drop": int(params["p_dropout"] * 10)})
+                        del params["p_dropout"]
+                        self.insert_trial(row, params, distributions)
+                        print("Untracked model", self.counter, "inserted!")
+                        self.counter += 1
 
     def initialize_study(self):
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials, callbacks=[self.store_best_candidates])
@@ -185,13 +198,14 @@ class OptunaParamFinder:
 
     def analyze_study(self, show_best=True):
         # Store study results
+        addon = "" if not self.is_pretrain else "pretrain_"
         print("-------------------------------------------------------------------------------------------------------")
         print("Storing study...")
         df = self.study.trials_dataframe()
-        df.to_csv(self.results_dir + "optuna_study_results.csv", index=False)
+        df.to_csv(self.results_dir + addon + "optuna_study_results.csv", index=False)
 
         # Store parameters distributions
-        distr_file = "distributions.json"
+        distr_file = addon + "distributions.json"
         if distr_file not in os.listdir(self.results_dir):
             distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
                              self.study.trials[-1].distributions.items()}
@@ -208,7 +222,7 @@ class OptunaParamFinder:
                     print("{}: {}".format(key, value))
 
             fig = optuna.visualization.plot_intermediate_values(self.study)
-            imgpath = self.results_dir + "plot_intermediate_values.jpg"
+            imgpath = self.results_dir + addon + "plot_intermediate_values.jpg"
             if self.s3 is not None:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")
@@ -224,7 +238,7 @@ class OptunaParamFinder:
 
             fig = optuna.visualization.plot_pareto_front(self.study,
                                                          target_names=["Validation metric", "Training metric"])
-            imgpath = self.results_dir + "plot_pareto_front.jpg"
+            imgpath = self.results_dir + addon + "plot_pareto_front.jpg"
             if self.s3 is not None:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")
@@ -237,20 +251,20 @@ class OptunaParamFinder:
             target_name = "Objective" + addon + " Value"
 
             fig = optuna.visualization.plot_optimization_history(self.study, target=target, target_name=target_name)
-            imgpath = self.results_dir + "plot_optimization_history" + addon + ".jpg"
+            imgpath = self.results_dir + addon + "plot_optimization_history" + addon + ".jpg"
             if self.s3 is not None:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")
 
             fig = optuna.visualization.plot_parallel_coordinate(self.study, target=target, target_name=target_name)
-            imgpath = self.results_dir + "plot_parallel_coordinate" + addon + ".jpg"
+            imgpath = self.results_dir + addon + "plot_parallel_coordinate" + addon + ".jpg"
             if self.s3 is not None:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")
         
         try:
             fig = optuna.visualization.plot_param_importances(self.study)
-            imgpath = self.results_dir + "plot_param_importance.jpg"
+            imgpath = self.results_dir + addon + "plot_param_importance.jpg"
             if self.s3 is not None:
                 imgpath = self.s3.open(imgpath, "wb")
             fig.write_image(imgpath, format="jpg")

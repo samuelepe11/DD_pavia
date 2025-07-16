@@ -8,7 +8,6 @@ import torchvision.transforms as transforms
 import time
 import optuna
 from PIL import Image
-from matplotlib.pyplot import title
 from transformers import ViTImageProcessor, ViTMAEForPreTraining, get_cosine_schedule_with_warmup
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -22,6 +21,11 @@ from Networks.ConvBaseNetwork import ConvBaseNetwork
 # Class
 class ViTMAETrainer(NetworkTrainer):
     pretrained_model_name = "facebook/vit-mae-base"
+    default_net_params = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
+                          "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
+                          "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 8, "p_dropout": 0,
+                          "use_batch_norm": False}
+    default_net_type = NetType.BASE_RES_NEXT101
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, decoder_net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, decoder_net_params=None, use_cuda=True,
@@ -30,10 +34,11 @@ class ViTMAETrainer(NetworkTrainer):
                          epochs=epochs, val_epochs=val_epochs, convergence_patience=convergence_patience,
                          convergence_thresh=convergence_thresh, preprocess_inputs=False, net_params=decoder_net_params,
                          use_cuda=use_cuda, s3=None, n_parallel_gpu=0, projection_dataset=projection_dataset,
-                         enhance_images=enhance_images)
+                         enhance_images=enhance_images, full_size=False)
 
         self.img_preprocessor = ViTImageProcessor.from_pretrained(self.pretrained_model_name)
         self.inference_data_transforms = transforms.Compose([
+            transforms.Normalize(mean=self.img_preprocessor.image_mean, std=self.img_preprocessor.image_std),
             transforms.Resize((self.img_preprocessor.size["height"], self.img_preprocessor.size["width"])),
         ])
 
@@ -45,7 +50,7 @@ class ViTMAETrainer(NetworkTrainer):
         self.train_parameters = train_parameters
         lr = train_parameters["base_lr"]
         l_decay = train_parameters["layer_decay"]
-        if l_decay is not None:
+        if l_decay != 0:
             param_groups = self.get_layerwise_lr_decay_params(base_lr=lr, layer_decay=l_decay)
         else:
             param_groups = [{"params": self.net_pretrain.parameters(), "lr": lr}]
@@ -109,16 +114,28 @@ class ViTMAETrainer(NetworkTrainer):
             # Display result
             plt.rcParams["figure.figsize"] = [24, 24]
             plt.subplot(1, 4, 1)
-            self.show_img(x[0], "Original image")
+            self.show_img(self.denormalize(x)[0], "Original image")
             plt.subplot(1, 4, 2)
-            self.show_img(img_masked[0], "Masked image")
+            self.show_img(self.denormalize(img_masked)[0], "Masked image")
             plt.subplot(1, 4, 3)
-            self.show_img(y[0], "Reconstructed patches")
+            self.show_img(self.denormalize(y)[0], "Reconstructed patches")
             plt.subplot(1, 4, 4)
-            self.show_img(img_reconstructed[0], "Final result")
+            self.show_img(self.denormalize(img_reconstructed)[0], "Final result")
             if title is not None:
                 plt.title(title)
             plt.show()
+
+    def denormalize(self, input):
+        mean = torch.tensor(self.img_preprocessor.image_mean)
+        std = torch.tensor(self.img_preprocessor.image_std)
+        if input.shape[-1] == 3:
+            mean = mean.view(1, 1, 1, 3)
+            std = std.view(1, 1, 1, 3)
+        else:
+            mean = mean.view(1, 3, 1, 1)
+            std = std.view(1, 3, 1, 1)
+
+        return input * std + mean
 
     def pretrain(self, show_epochs=False, trial_n=None, trial=None, double_output=False, continue_training=False):
         if show_epochs:
@@ -233,11 +250,12 @@ class ViTMAETrainer(NetworkTrainer):
             proj = projection_batch[i]
             proj = torch.tensor(proj).float()
             proj = torch.concat([proj] * 3, dim=0)
+            proj -= torch.min(proj)
+            proj /= (torch.max(proj) - torch.min(proj) + 1e-8)
+
             if is_training:
                 proj = ConvBaseNetwork.training_data_transforms(proj)
             proj = self.inference_data_transforms(proj)
-            proj -= torch.min(proj)
-            proj /= (torch.max(proj) - torch.min(proj) + 1e-8)
             proj_batch.append(proj)
         proj_batch = torch.stack(proj_batch, dim=0)
         if self.use_cuda:
@@ -332,7 +350,7 @@ class ViTMAETrainer(NetworkTrainer):
 
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
-                   projection_dataset=False, s3=None, batch_size=None):
+                   projection_dataset=False, s3=None, batch_size=None, new_epochs=None):
         file_name = model_name if trial_n is None else "trial_" + str(trial_n)
         print("Loading " + file_name + "...")
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
@@ -350,6 +368,8 @@ class ViTMAETrainer(NetworkTrainer):
 
         if batch_size is not None:
             trainer1.batch_size = batch_size
+        if new_epochs is not None:
+            trainer1.epochs = new_epochs
 
         return network_trainer
 
@@ -363,8 +383,7 @@ if __name__ == "__main__":
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "vitmae"
-    decoder_net_type1 = NetType.BASE_RES_NEXT101
-    epochs1 = 500
+    epochs1 = 200
     preprocess_inputs1 = False
     trial_n1 = None
     val_epochs1 = 10
@@ -387,15 +406,11 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define trainer
-    train_parameters1 = {"base_lr": 5e-5, "beta1": 0.9, "beta2": 0.999, "weight_decay": 1e-4, "layer_decay": None,
-                         "eps": 1e-9, "scheduler": "reduce_lr_on_plateau", "min_lr": 1e-8, "batch_size": 64}
-    decoder_net_params1 = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
-                           "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                           "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 8, "p_dropout": 0,
-                           "use_batch_norm": False}
+    train_parameters1 = {"base_lr": 1e-3, "beta1": 0.9, "beta2": 0.999, "weight_decay": 1e-4, "layer_decay": 0,
+                         "eps": 1e-9, "scheduler": "reduce_lr_on_plateau", "min_lr": 1e-8, "batch_size": 32}
     trainer1 = ViTMAETrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
-                             val_data=val_data1, test_data=test_data1, decoder_net_type=decoder_net_type1, epochs=epochs1,
-                             val_epochs=val_epochs1, decoder_net_params=decoder_net_params1, use_cuda=use_cuda1,
+                             val_data=val_data1, test_data=test_data1, decoder_net_type=None, epochs=epochs1,
+                             val_epochs=val_epochs1, decoder_net_params=None, use_cuda=use_cuda1,
                              projection_dataset=projection_dataset1, enhance_images=enhance_images1,
                              train_parameters=train_parameters1)
 
@@ -410,7 +425,7 @@ if __name__ == "__main__":
     indices1 = list(range(3))
     proj_batch1 = []
     for i1 in indices1:
-        segm, extra = train_data1[i1]
+        segm, extra = val_data1[i1]
         proj1 = segm[0][1]
         proj1 = np.stack([proj1] * 3, axis=0)
         proj1 = torch.tensor(proj1).float()
@@ -433,11 +448,11 @@ if __name__ == "__main__":
 
     # Continue pretraining
     '''print()
-    batch_size1 = 100
+    epochs2 = 100
     trainer1 = ViTMAETrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                         test_data=test_data1, projection_dataset=projection_dataset1,
-                                        batch_size=batch_size1)
+                                        new_epochs=epochs2)
     trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
 
     trainer1.pretrain(show_epochs=True, continue_training=True)
