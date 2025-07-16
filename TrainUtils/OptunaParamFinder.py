@@ -22,7 +22,7 @@ class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
-                 search_for_untracked_models=False, enhance_images=True):
+                 search_for_untracked_models=False, enhance_images=True, full_size=True):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -35,6 +35,7 @@ class OptunaParamFinder:
         self.n_parallel_gpu = n_parallel_gpu
         self.projection_dataset = projection_dataset
         self.enhance_images = enhance_images
+        self.full_size = full_size
 
         self.output_metric = output_metric
         self.double_output = double_output
@@ -129,7 +130,7 @@ class OptunaParamFinder:
 
     def objective(self, trial):
         # Store previous results
-        if self.counter >= 10 and self.counter % 10 == 0:
+        if self.counter >= 2:
             self.analyze_study(show_best=False)
 
         # Sample parameters
@@ -143,7 +144,7 @@ class OptunaParamFinder:
             "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=6),
             "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 1001, step=100),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1))),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 3, step=1))),
             "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 5, 9, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
@@ -161,7 +162,7 @@ class OptunaParamFinder:
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
                                      net_params=params, use_cuda=self.use_cuda, s3=self.s3,
                                      n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset,
-                                     enhance_images=self.enhance_images)
+                                     enhance_images=self.enhance_images, full_size=self.full_size)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                        output_metric=self.output_metric, double_output=self.double_output)
             print("Value:", val_metric)
@@ -312,7 +313,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "projection_vit_optuna_enhance"
+    model_name1 = "projection_vit_optuna_full_size"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_VIT
@@ -321,6 +322,7 @@ if __name__ == "__main__":
     use_cuda1 = True
     projection_dataset1 = True
     enhance_images1 = True
+    full_size1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -333,7 +335,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 15
+    n_trials1 = 5
     output_metric1 = "mcc"
     double_output1 = True
     search_for_untracked_models1 = False
@@ -342,7 +344,7 @@ if __name__ == "__main__":
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                 projection_dataset=projection_dataset1, output_metric=output_metric1,
                                 double_output=double_output1, search_for_untracked_models=search_for_untracked_models1,
-                                enhance_images=enhance_images1)
+                                enhance_images=enhance_images1, full_size=full_size1)
     # Run search
     optuna1.initialize_study()
 

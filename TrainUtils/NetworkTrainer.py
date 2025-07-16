@@ -33,7 +33,7 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True):
+                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -79,6 +79,8 @@ class NetworkTrainer:
         self.convergence_patience = convergence_patience
         self.preprocess_inputs = preprocess_inputs
         self.enhance_images = enhance_images
+        self.full_size = full_size
+        self.batch_size = self.net_params["batch_size"]
 
         self.start_time = None
         self.end_time = None
@@ -114,9 +116,10 @@ class NetworkTrainer:
         else:
             num_workers = 0
             pin_memory = False
-        dataloader = DataLoader(dataset=data, batch_size=self.net_params["batch_size"], shuffle=shuffle,
+        img_dim = self.net.input_dim if not self.full_size else None
+        dataloader = DataLoader(dataset=data, batch_size=self.batch_size, shuffle=shuffle,
                                 num_workers=num_workers, pin_memory=pin_memory,
-                                collate_fn=partial(NetworkTrainer.custom_collate_fn, img_dim=self.net.input_dim))
+                                collate_fn=partial(NetworkTrainer.custom_collate_fn, img_dim=img_dim))
         dim = len(data)
 
         return dataloader, dim
@@ -418,7 +421,7 @@ class NetworkTrainer:
             filepath = self.s3.open(filepath, "wb")
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": self.net_params,
-                    "model_state_dict": self.net.state_dict()}, filepath)
+                    "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -476,7 +479,8 @@ class NetworkTrainer:
 
     def draw_training_curves(self, is_pretrain=False):
         plt.close()
-        plt.figure(figsize=(5, 7))
+        fig_size = (5, 7) if not is_pretrain else (7, 5)
+        plt.figure(figsize=fig_size)
         plt.suptitle("Training curves")
 
         # Losses
@@ -536,10 +540,10 @@ class NetworkTrainer:
 
         input = np.stack(adjusted_projection)
         input = torch.from_numpy(input)
-        return input[0]
+        return input
 
     @staticmethod
-    def custom_collate_fn(batch, img_dim):
+    def custom_collate_fn(batch, img_dim=None):
         segment_datas = []
         pt_ids = []
         segment_ids = []
@@ -557,13 +561,20 @@ class NetworkTrainer:
         # Resize images to the same dimension and patch channels in the batch
         max_proj_num = np.max([len(x) for x in segment_datas])
         segment_datas_patched = []
+        if img_dim is not None:
+            img_h = img_dim
+            img_w = img_dim
+        else:
+            shapes = [[proj[1].shape for proj in segment_data] for segment_data in segment_datas]
+            img_h = int(np.mean([shape[0][0] for shape in shapes]))
+            img_w = int(np.mean([shape[0][1] for shape in shapes]))
         for segment_data in segment_datas:
             temp = []
             for proj in segment_data:
                 proj_id = proj[0]
                 img = proj[1]
                 descr = proj[2]
-                temp.append((proj_id, cv2.resize(img, (img_dim, img_dim)), descr))
+                temp.append((proj_id, cv2.resize(img, (img_w, img_h)), descr))
             extra_proj = max_proj_num - len(segment_data)
             if extra_proj > 0:
                 for _ in range(extra_proj):
@@ -666,7 +677,7 @@ class NetworkTrainer:
 
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
-                   projection_dataset=False, s3=None):
+                   projection_dataset=False, s3=None, batch_size=None):
         file_name = model_name if trial_n is None else "trial_" + str(trial_n)
         print("Loading " + file_name + "...")
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
@@ -684,6 +695,9 @@ class NetworkTrainer:
 
         if not hasattr(network_trainer, "enhance_images"):
             network_trainer.enhance_images = True
+
+        if batch_size is not None:
+            trainer1.batch_size = batch_size
 
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
@@ -740,20 +754,21 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "resnext101_optuna"
-    net_type1 = NetType.BASE_RES_NEXT101
-    epochs1 = 100
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "prova"
+    net_type1 = NetType.BASE_VIT
+    epochs1 = 500
     preprocess_inputs1 = True
-    trial_n1 = 14
+    trial_n1 = None
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
     show_test1 = True
-    projection_dataset1 = False
+    projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
     enhance_images1 = True
+    full_size1 = True
 
     # Load data
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
@@ -773,12 +788,13 @@ if __name__ == "__main__":
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
-                              use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1)
+                              use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
+                              full_size=full_size1)
 
     # Train model
-    '''trainer1.train(show_epochs=True)
+    trainer1.train(show_epochs=True)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)'''
+                                   assess_calibration=assess_calibration1)
     
     # Evaluate model
     print()

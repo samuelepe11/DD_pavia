@@ -227,7 +227,7 @@ class MapGenerator:
         extra = [[extra_element] for extra_element in extra]
         input = trainer.preprocess_fn(projection_batch, projection_type_batch, extra, set_type, max_proj_num)
 
-        return input
+        return input[0]
 
 
 class MultiInputTorchCamBuilder(TorchCamBuilder):
