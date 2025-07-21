@@ -23,12 +23,12 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, epochs, val_epochs, use_cuda,
                  n_trials, projection_dataset=False, double_output=False, search_for_untracked_models=False,
-                 enhance_images=True):
+                 preprocess_inputs=False, enhance_images=False):
         super().__init__(model_name, working_dir, train_data, val_data, test_data, net_type=None, epochs=epochs,
                          val_epochs=val_epochs, use_cuda=use_cuda, n_trials=n_trials, s3=None, n_parallel_gpu=0,
                          projection_dataset=projection_dataset, output_metric="loss", double_output=double_output,
-                         search_for_untracked_models=search_for_untracked_models, enhance_images=enhance_images,
-                         full_size=False, direction="minimize", is_pretrain=True)
+                         search_for_untracked_models=search_for_untracked_models, preprocess_inputs=preprocess_inputs,
+                         enhance_images=enhance_images, full_size=False, direction="minimize", is_pretrain=True)
 
     def retrieve_untracked_models(self, distributions):
         if self.search_for_untracked_models:
@@ -93,7 +93,8 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
                                     val_data=self.val_data, test_data=self.test_data, decoder_net_type=None,
                                     epochs=self.epochs, val_epochs=self.val_epochs, decoder_net_params=None,
                                     use_cuda=self.use_cuda, projection_dataset=self.projection_dataset,
-                                    enhance_images=self.enhance_images, train_parameters=params)
+                                    preprocess_inputs=self.preprocess_inputs, enhance_images=self.enhance_images,
+                                    train_parameters=params)
             val_loss = trainer.pretrain(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                         double_output=self.double_output, continue_training=False)
             print("Value:", val_loss)
@@ -104,10 +105,10 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
 
         except TrialPruned:
             raise
-        '''except Exception as e:
+        except Exception as e:
             print(f"An error occurred: {e}")
             val_loss = 1e10
-            train_loss = 1e10'''
+            train_loss = 1e10
 
         if not self.double_output:
             return val_loss
@@ -122,10 +123,11 @@ if __name__ == "__main__":
     model_name1 = "vitmae_optuna"
     selected_segments1 = None
     selected_projection1 = None
-    epochs1 = 200
+    epochs1 = 500
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
+    preprocess_inputs1 = False
     enhance_images1 = False
 
     # Load data
@@ -139,7 +141,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 50
+    n_trials1 = 100
     double_output1 = False
     search_for_untracked_models1 = False
     optuna1 = PretrainOptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
@@ -147,7 +149,7 @@ if __name__ == "__main__":
                                         val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                         projection_dataset=projection_dataset1, double_output=double_output1,
                                         search_for_untracked_models=search_for_untracked_models1,
-                                        enhance_images=enhance_images1)
+                                        preprocess_inputs=preprocess_inputs1, enhance_images=enhance_images1)
     # Run search
     optuna1.initialize_study()
 

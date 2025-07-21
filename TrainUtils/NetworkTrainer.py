@@ -113,7 +113,7 @@ class NetworkTrainer:
 
     def load_data(self, data, shuffle=False):
         if self.use_cuda:
-            num_workers = 0#
+            num_workers = 8
             pin_memory = True
         else:
             num_workers = 0
@@ -421,9 +421,14 @@ class NetworkTrainer:
         filepath = self.results_dir + addon + ".pt"
         if self.s3 is not None:
             filepath = self.s3.open(filepath, "wb")
+        train_parameters = None if not hasattr(self, "train_parameters") else self.train_parameters
+        optimizer_pretrain = None if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": self.net_params,
-                    "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses}, filepath)
+                    "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
+                    "val_losses": self.val_losses, "val_eval_epochs": self.val_eval_epochs,
+                    "train_parameters": train_parameters, "enhance_images": self.enhance_images,
+                    "optimizer_pretrain_state_dict": optimizer_pretrain.state_dict()}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -687,16 +692,16 @@ class NetworkTrainer:
         if s3 is not None:
             filepath = s3.open(filepath)
         checkpoint = torch.load(filepath, weights_only=False)
+
+        if "enhance_images" not in checkpoint.keys():
+            checkpoint.update({"enhance_images": False})
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
-                                         projection_dataset=projection_dataset)
+                                         projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"])
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
-
-        if not hasattr(network_trainer, "enhance_images"):
-            network_trainer.enhance_images = True
 
         if batch_size is not None:
             trainer1.batch_size = batch_size

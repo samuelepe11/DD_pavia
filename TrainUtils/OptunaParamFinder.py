@@ -22,7 +22,7 @@ class OptunaParamFinder:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
-                 search_for_untracked_models=False, enhance_images=True, full_size=True, direction="maximize",
+                 search_for_untracked_models=False, preprocess_inputs=True, enhance_images=True, full_size=True, direction="maximize",
                  is_pretrain=False):
         self.model_name = model_name
         self.working_dir = working_dir
@@ -35,6 +35,7 @@ class OptunaParamFinder:
         self.use_cuda = use_cuda
         self.n_parallel_gpu = n_parallel_gpu
         self.projection_dataset = projection_dataset
+        self.preprocess_inputs = preprocess_inputs
         self.enhance_images = enhance_images
         self.full_size = full_size
 
@@ -175,6 +176,7 @@ class OptunaParamFinder:
                                      net_type=self.net_type, epochs=self.epochs, val_epochs=self.val_epochs,
                                      net_params=params, use_cuda=self.use_cuda, s3=self.s3,
                                      n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset,
+                                     preprocess_inputs=self.preprocess_inputs,
                                      enhance_images=self.enhance_images, full_size=self.full_size)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                        output_metric=self.output_metric, double_output=self.double_output)

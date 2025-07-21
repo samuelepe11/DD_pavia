@@ -8,6 +8,8 @@ import torchvision.transforms as transforms
 import time
 import optuna
 from PIL import Image
+from sympy.categories import Object
+from tensorflow.python.ops.gen_nn_ops import l2_loss
 from transformers import ViTImageProcessor, ViTMAEForPreTraining, get_cosine_schedule_with_warmup
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -28,11 +30,11 @@ class ViTMAETrainer(NetworkTrainer):
     default_net_type = NetType.BASE_RES_NEXT101
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, decoder_net_type, epochs, val_epochs,
-                 convergence_patience=5, convergence_thresh=1e-3, decoder_net_params=None, use_cuda=True,
-                 projection_dataset=False, enhance_images=True, train_parameters=None):
+                 convergence_patience=10, convergence_thresh=1e-3, decoder_net_params=None, use_cuda=True,
+                 projection_dataset=False, preprocess_inputs=False, enhance_images=False, train_parameters=None):
         super().__init__(model_name, working_dir, train_data, val_data, test_data, net_type=decoder_net_type,
                          epochs=epochs, val_epochs=val_epochs, convergence_patience=convergence_patience,
-                         convergence_thresh=convergence_thresh, preprocess_inputs=False, net_params=decoder_net_params,
+                         convergence_thresh=convergence_thresh, preprocess_inputs=preprocess_inputs, net_params=decoder_net_params,
                          use_cuda=use_cuda, s3=None, n_parallel_gpu=0, projection_dataset=projection_dataset,
                          enhance_images=enhance_images, full_size=False)
 
@@ -185,7 +187,7 @@ class ViTMAETrainer(NetworkTrainer):
             if epoch == self.starting_epoch or epoch % self.val_epochs == 0:
                 val_loss = self.test_pretrain(set_type=SetType.VAL)
                 self.val_losses.append(val_loss)
-                self.val_eval_epochs.append(epoch - self.starting_epoch)
+                self.val_eval_epochs.append(epoch)
                 if show_epochs:
                     print(" > val loss = " + str(np.round(val_loss, 5)))
 
@@ -242,10 +244,14 @@ class ViTMAETrainer(NetworkTrainer):
             else:
                 return val_loss
 
-    def apply_network_pretrain(self, net, instance_batch, is_training=False):
+    def apply_network_pretrain(self, net, instance_batch, is_training=False, set_type=SetType.TRAIN):
         proj_batch = []
-        item, _ = instance_batch
-        _, projection_batch, _ = item
+        item, extra = instance_batch
+        projection_type_batch, projection_batch, _ = item
+        if self.preprocess_inputs:
+            projection_batch = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
+            projection_batch = projection_batch.numpy().astype(np.uint16)
+
         for i in range(projection_batch.shape[0]):
             proj = projection_batch[i]
             proj = torch.tensor(proj).float()
@@ -284,7 +290,7 @@ class ViTMAETrainer(NetworkTrainer):
         loss = 0
         with torch.no_grad():
             for batch in loader:
-                temp_loss = self.apply_network_pretrain(net, batch)
+                temp_loss = self.apply_network_pretrain(net, batch, set_type=set_type)
                 loss += temp_loss.item()
             loss /= len(loader)
 
@@ -362,9 +368,15 @@ class ViTMAETrainer(NetworkTrainer):
                                         val_data=val_data, test_data=test_data, decoder_net_type=checkpoint["net_type"],
                                         epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                         decoder_net_params=checkpoint["net_params"], use_cuda=use_cuda,
-                                        projection_dataset=projection_dataset)
+                                        projection_dataset=projection_dataset,
+                                        train_parameters=checkpoint["train_parameters"],
+                                        preprocess_inputs=checkpoint["preprocess_inputs"],
+                                        enhance_images=checkpoint["enhance_images"])
         network_trainer.net_pretrain.load_state_dict(checkpoint["model_state_dict"])
         network_trainer.train_losses = checkpoint["train_losses"]
+        network_trainer.val_losses = checkpoint["val_losses"]
+        network_trainer.val_eval_epochs = checkpoint["val_eval_epochs"]
+        network_trainer.optimizer_pretrain = checkpoint["optimizer_pretrain_state_dict"]
 
         if batch_size is not None:
             trainer1.batch_size = batch_size
@@ -382,9 +394,8 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae"
-    epochs1 = 200
-    preprocess_inputs1 = False
+    model_name1 = "vitmae_preprocess"
+    epochs1 = 10
     trial_n1 = None
     val_epochs1 = 10
     use_cuda1 = True
@@ -393,6 +404,7 @@ if __name__ == "__main__":
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
+    preprocess_inputs1 = False
     enhance_images1 = False
 
     # Load data
@@ -411,8 +423,8 @@ if __name__ == "__main__":
     trainer1 = ViTMAETrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                              val_data=val_data1, test_data=test_data1, decoder_net_type=None, epochs=epochs1,
                              val_epochs=val_epochs1, decoder_net_params=None, use_cuda=use_cuda1,
-                             projection_dataset=projection_dataset1, enhance_images=enhance_images1,
-                             train_parameters=train_parameters1)
+                             projection_dataset=projection_dataset1, preprocess_inputs=preprocess_inputs1,
+                             enhance_images=enhance_images1, train_parameters=train_parameters1)
 
     # Apply on an example image
     url1 = "https://user-images.githubusercontent.com/11435359/147738734-196fd92f-9260-48d5-ba7e-bf103d29364d.jpg"
@@ -423,40 +435,51 @@ if __name__ == "__main__":
 
     # Apply on an X-ray image
     indices1 = list(range(3))
-    proj_batch1 = []
+    instance_batch1 = trainer1.custom_collate_fn([train_data1[i1] for i1 in indices1],
+                                                 img_dim=(trainer1.img_preprocessor.size["height"]))
+    item1, extra1 = instance_batch1
+    proj_type_batch1, proj_batch1, _ = item1
+    if preprocess_inputs1:
+        proj_batch1 = trainer1.preprocess_fn(proj_batch1, proj_type_batch1, extra1, SetType.TRAIN)
+
+    proj_list1 = []
     for i1 in indices1:
-        segm, extra = val_data1[i1]
-        proj1 = segm[0][1]
-        proj1 = np.stack([proj1] * 3, axis=0)
+        proj1 = np.stack([proj_batch1[i1, 0]] * 3, axis=0)
         proj1 = torch.tensor(proj1).float()
         proj1 -= torch.min(proj1)
         proj1 /= (torch.max(proj1) - torch.min(proj1))
-        proj_batch1.append(transforms.Resize((trainer1.img_preprocessor.size["height"],
-                                             trainer1.img_preprocessor.size["width"]))(proj1))
-    proj_batch1 = torch.stack(proj_batch1, 0)
+        proj_list1.append(proj1)
+    proj_batch1 = torch.stack(proj_list1, 0)
 
     NetworkTrainer.set_seed(111099)
     trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training")
 
     # Pretrain model
-    NetworkTrainer.set_seed(111099)
-    trainer1.pretrain(show_epochs=True)
-    trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+    new_pretraining1 = True
+    if new_pretraining1:
+        NetworkTrainer.set_seed(111099)
+        trainer1.pretrain(show_epochs=True)
 
-    NetworkTrainer.set_seed(111099)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")
+        NetworkTrainer.set_seed(111099)
+        trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")
 
-    # Continue pretraining
-    '''print()
-    epochs2 = 100
+    # Evaluate loaded model
+    print()
+    epochs2 = None
     trainer1 = ViTMAETrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                         test_data=test_data1, projection_dataset=projection_dataset1,
                                         new_epochs=epochs2)
-    trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
-
-    trainer1.pretrain(show_epochs=True, continue_training=True)
-    trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
 
     NetworkTrainer.set_seed(111099)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")'''
+    trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")
+
+    # Continue pretraining
+    '''if not new_pretraining1:
+        trainer1.pretrain(show_epochs=True, continue_training=True)
+        trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+
+        NetworkTrainer.set_seed(111099)
+        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")'''
