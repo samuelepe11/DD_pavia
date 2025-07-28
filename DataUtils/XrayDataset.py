@@ -8,10 +8,13 @@ import numpy as np
 import random
 import copy
 from torch.utils.data import Dataset
+from datetime import datetime
 
 from DataUtils.PatientInstance import PatientInstance
+from DataUtils.ExtraPatientInstance import ExtraPatientInstance
 from Enumerators.ProjectionType import ProjectionType
 from Enumerators.SetType import SetType
+from Enumerators.ExtraDatasetType import ExtraDatasetType
 
 
 # Class
@@ -22,6 +25,8 @@ class XrayDataset(Dataset):
     models_fold = "models/"
     preliminary_fold = "preliminary_analysis/"
     jai_fold = "jai_results/"
+    extra_data_fold = "data_extra/"
+
     info_names = ["id", "sex", "birth", "segments", "projections", "spondylarthrosis_present", "label",
                   "fracture_position", "clinical_report", "ct_present", "ct_date", "ct_report", "mri_present",
                   "mri_date", "mri_report", "notes"]
@@ -36,6 +41,7 @@ class XrayDataset(Dataset):
         self.results_dir = working_dir + self.results_fold
         self.preliminary_dir = self.results_dir + self.preliminary_fold
         self.jai_dir = self.results_dir + self.jai_fold
+        self.extra_data_dir = working_dir + self.extra_data_folder
 
         self.info_file_path = None
         self.dicom_folder_path = None
@@ -327,9 +333,124 @@ class XrayDataset(Dataset):
         ind = self.dicom_instances.index(name)
         return self.__getitem__(ind)
 
+    def complement_with_extra_data(self, extra_dataset_type):
+        dataset_name = extra_dataset_type.get_dataset_name()
+        dataset_path = self.working_dir + self.extra_data_fold + dataset_name + "/"
+        ref_id_start = extra_dataset_type.get_ref_id_start()
+
+        img_names = []
+        img_proj_ids = []
+        csv_pool = []
+        for proj_id in os.listdir(dataset_path):
+            if proj_id.endswith(".csv"):
+                csv_pool.append(pd.read_csv(dataset_path + proj_id))
+                continue
+            files = os.listdir(dataset_path + proj_id)
+            img_names += files
+            img_proj_ids += [proj_id] * len(files)
+        if len(csv_pool) > 0:
+            csv_pool = pd.concat(csv_pool, ignore_index=True)
+
+        # Detect subject IDs
+        if extra_dataset_type == ExtraDatasetType.BUU:
+            img_segm_ids = ["L"] * len(img_names)
+            pt_ids = np.unique([int(name[:4]) for name in img_names])
+
+            new_instances = []
+            for pt_id in pt_ids:
+                new_id = ref_id_start + pt_id
+                new_instances.append(str(new_id) + "l")
+                pt_instances = [name for name in img_names if int(name[:4]) == pt_id]
+                img_segm_pt = [segm_id for i, segm_id in enumerate(img_segm_ids) if img_names[i] in pt_instances]
+                img_proj_pt = [proj_id for i, proj_id in enumerate(img_proj_ids) if img_names[i] in pt_instances]
+                pt_info = {"id": new_id, "sex": pt_instances[0][5], "age": int(pt_instances[0][7:10]), "segments": ["L"]}
+                self.patient_data.append(ExtraPatientInstance(pt_info, pt_instances, dataset_path, img_proj_pt,
+                                                              img_segm_pt))
+
+        elif extra_dataset_type == ExtraDatasetType.AASCE:
+            img_segm_ids = ["D"] * len(img_names)
+            pt_ids = np.unique([int(name.split("-")[-1][:-4].split(" ")[0]) for name in img_names])
+
+            new_instances = []
+            for pt_id in pt_ids:
+                new_id = ref_id_start + pt_id
+                new_instances.append(str(new_id) + "d")
+                pt_instances = [name for name in img_names if int(name.split("-")[-1][:-4].split(" ")[0]) == pt_id]
+                img_segm_pt = [segm_id for i, segm_id in enumerate(img_segm_ids) if img_names[i] in pt_instances]
+                img_proj_pt = [proj_id for i, proj_id in enumerate(img_proj_ids) if img_names[i] in pt_instances]
+
+                date = "-".join(pt_instances[0].split("-")[-4:-1])
+                date = datetime.strptime(date, "%d-%B-%Y")
+                date = date.strftime("%d/%m/%y")
+                pt_info = {"id": new_id, "segments": ["D"], "acquisition_date": date}
+                self.patient_data.append(ExtraPatientInstance(pt_info, pt_instances, dataset_path, img_proj_pt,
+                                                              img_segm_pt))
+
+        elif extra_dataset_type == ExtraDatasetType.DD:
+            pt_ids = []
+            img_segm_ids = []
+            img_labels = []
+            vertebra_names = []
+            for name in img_names:
+                if name[0] == "x":
+                    pt_ids.append(int(name.split("_")[2].split(".")[0]) + 500)
+                    img_segm_ids.append("L")
+                    img_labels.append("L")
+                else:
+                    sep = "-" if "-" in name else "_"
+                    pt_ids.append(int(name.split(sep)[0]))
+                    tmp_label = name.split("_")[1][:-4]
+                    if tmp_label[0] == "T":
+                        tmp_label = "D" + tmp_label[1:]
+                    img_segm_ids.append(tmp_label[0])
+                    
+                    label = bool(csv_pool.loc[csv_pool["image name"] == name, "ground truth"].values)
+                    img_labels.append(label)
+                    vertebra_names.append(tmp_label)
+            pt_ids = np.unique(pt_ids)
+
+            new_instances = []
+            for pt_id in pt_ids:
+                new_id = ref_id_start + pt_id
+                pt_instances = []
+                for name in img_names:
+                    if name[0] == "x":
+                        tmp_id = int(name.split("_")[2].split(".")[0]) + 500
+                    else:
+                        sep = "-" if "-" in name else "_"
+                        tmp_id = int(name.split(sep)[0])
+                    if tmp_id == pt_id:
+                        pt_instances.append(name)
+
+                img_segm_pt = []
+                img_proj_pt = []
+                img_label_pt = []
+                vertebra_name_pt = []
+                for i in range(len(img_segm_ids)):
+                    if img_names[i] in pt_instances:
+                        img_segm_pt.append(img_segm_ids[i])
+                        img_proj_pt.append(img_proj_ids[i])
+                        img_label_pt.append(img_labels[i])
+                        vertebra_name_pt.append(vertebra_names[i])
+                segments = np.unique(img_segm_ids)
+                for segm_id in segments:
+                    new_instances.append(str(new_id) + segm_id.lower())
+
+                pt_info = {"id": new_id, "segments": segments, "label": img_label_pt, "fracture_position": vertebra_names}
+                self.patient_data.append(ExtraPatientInstance(pt_info, pt_instances, dataset_path, img_proj_pt,
+                                                              img_segm_pt))
+
+        else:
+            new_instances = []
+            print(extra_dataset_type, "is not available!")
+
+        self.dicom_instances += new_instances
+        self.len += len(new_instances)
+        self.training_pts = [pt_datum.id for pt_datum in self.patient_data]
+
     @staticmethod
     def load_dataset(working_dir, dataset_name, set_type=None, s3=None, selected_segments=None,
-                     selected_projection=None):
+                     selected_projection=None, correct_mistakes=True):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
         file = open(file_path, "rb") if s3 is None else s3.open(file_path, "rb")
         dataset = pickle.load(file)
@@ -355,47 +476,49 @@ class XrayDataset(Dataset):
         dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored files
-        for i in range(dataset.len):
-            instance = dataset.dicom_instances[i]
-            instance_list = list(instance)
-            if "Copia" in instance:
-                dataset.dicom_instances[i] = "".join(instance_list[:4])
-            elif len(instance) > 4:
-                dataset.dicom_instances[i] = "".join(instance_list[:3] + [instance_list[4]])
+        if correct_mistakes:
+            for i in range(dataset.len):
+                instance = dataset.dicom_instances[i]
+                instance_list = list(instance)
+                if "Copia" in instance:
+                    dataset.dicom_instances[i] = "".join(instance_list[:4])
+                elif len(instance) > 4:
+                    dataset.dicom_instances[i] = "".join(instance_list[:3] + [instance_list[4]])
 
         # Correct mistakes in the original data files
-        for datum in dataset.patient_data:
-            if datum.fracture_position is not None:
-                frac_pos = []
-                for pos in datum.fracture_position:
-                    new_pos = pos.replace(" ", "").replace("...", "")
-                    if "Tratto" in pos:
-                        poses = pos.split("Tratto")
-                        frac_pos.append(poses[0])
-                        new_pos = poses[1]
-                    frac_pos.append(new_pos)
+        if correct_mistakes:
+            for datum in dataset.patient_data:
+                if datum.fracture_position is not None:
+                    frac_pos = []
+                    for pos in datum.fracture_position:
+                        new_pos = pos.replace(" ", "").replace("...", "")
+                        if "Tratto" in pos:
+                            poses = pos.split("Tratto")
+                            frac_pos.append(poses[0])
+                            new_pos = poses[1]
+                        frac_pos.append(new_pos)
 
-            for i in range(len(datum.pt_data)):
-                segm = datum.pt_data[i]
-                for j in range(len(segm)):
-                    temp = list(segm[j])
-                    temp[2] = temp[2].replace("...", "").replace(" ", "")
-                    if "Tratto" in temp[2]:
-                        temp1 = temp[2].split("Tratto")
-                        temp[2] = temp1[0] if datum.segments[i] in temp1[0] else temp1[1]
-                    datum.pt_data[i][j] = tuple(temp)
-            if datum.id == 81:
-                datum.segments = [datum.segments[0], "L"]
-            if datum.id == 335:
-                datum.segments = ["C", datum.segments[0]]
-            if datum.id == 112:
-                datum.pt_data = [datum.pt_data[0], datum.pt_data[2]]
-            if datum.id == 117:
-                datum.segments = ["C"] + datum.segments[:2]
-            if datum.id == 161:
-                datum.pt_data[3].append(datum.pt_data[2][2])
-                datum.pt_data[3].append(datum.pt_data[2][3])
-                datum.pt_data[2] = datum.pt_data[2][:2]
+                for i in range(len(datum.pt_data)):
+                    segm = datum.pt_data[i]
+                    for j in range(len(segm)):
+                        temp = list(segm[j])
+                        temp[2] = temp[2].replace("...", "").replace(" ", "")
+                        if "Tratto" in temp[2]:
+                            temp1 = temp[2].split("Tratto")
+                            temp[2] = temp1[0] if datum.segments[i] in temp1[0] else temp1[1]
+                        datum.pt_data[i][j] = tuple(temp)
+                if datum.id == 81:
+                    datum.segments = [datum.segments[0], "L"]
+                if datum.id == 335:
+                    datum.segments = ["C", datum.segments[0]]
+                if datum.id == 112:
+                    datum.pt_data = [datum.pt_data[0], datum.pt_data[2]]
+                if datum.id == 117:
+                    datum.segments = ["C"] + datum.segments[:2]
+                if datum.id == 161:
+                    datum.pt_data[3].append(datum.pt_data[2][2])
+                    datum.pt_data[3].append(datum.pt_data[2][3])
+                    datum.pt_data[2] = datum.pt_data[2][:2]
 
         # Select projection
         if selected_projection is not None:
@@ -509,11 +632,18 @@ if __name__ == "__main__":
     # Load an already split datasets
     dataset_name1 = "xray_dataset_training"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
-                                        selected_projection=ProjectionType.LAT)
+                                        selected_projection=None)
 
     # Show items
     ind1 = 1
     # dataset1.show_item(ind=ind1)
 
     pt_id1 = 161
-    dataset1.show_patient(pt_id=pt_id1)
+    # dataset1.show_patient(pt_id=pt_id1)
+
+    # Extend training set
+    for extra_dataset_type1 in ExtraDatasetType:
+        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
+    dataset1.store_dataset(dataset_name="extended_" + dataset_name1)
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + dataset_name1,
+                                        selected_segments=None, selected_projection=None, correct_mistakes=False)

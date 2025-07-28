@@ -237,7 +237,7 @@ class NetworkTrainer:
             else:
                 return val_output
 
-    def apply_network(self, net, instance, set_type):
+    def apply_network(self, net, instance, set_type, is_vit_mae=False):
         item, extra = instance
         projection_type_batch, projection_batch, _ = item
         input = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
@@ -248,7 +248,10 @@ class NetworkTrainer:
         y = y.to(self.device)
 
         # Loss evaluation
-        output = net(input, extra[1], projection_type_batch, self.n_parallel_gpu)
+        if not is_vit_mae:
+            output = net(input, extra[1], projection_type_batch, self.n_parallel_gpu)
+        else:
+            output = net(input)
         loss = self.criterion(output, y)
 
         # Accuracy evaluation

@@ -31,8 +31,8 @@ class ImageCropSurvey(MaskSurvey):
     vertebra_values = [n if len(n) <= 3 else n[0] for n in vertebra_names]
     vertebra_dict = dict(zip(vertebra_names, vertebra_values))
 
-    def __init__(self, dataset, desired_instances, dataset_name=None):
-        super(ImageCropSurvey, self).__init__(dataset, desired_instances, False, dataset_name, True)
+    def __init__(self, dataset, desired_instances, dataset_name=None, blur=False):
+        super(ImageCropSurvey, self).__init__(dataset, desired_instances, blur, dataset_name, True)
 
     def process_mask(self, name, count, mask_id, adjust_specifics, mask):
         cropping_ref_name = "cropping_ref.csv"
@@ -129,6 +129,8 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1)
 
     # Launch app
-    survey = ImageCropSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, dataset_name=dataset_name1)
+    blur1 = False
+    survey = ImageCropSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, dataset_name=dataset_name1,
+                             blur=blur1)
     print("Add '?__theme=dark' at the end of the link")
     survey.build_app()

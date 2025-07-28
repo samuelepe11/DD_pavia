@@ -7,13 +7,33 @@ from Enumerators.ProjectionType import ProjectionType
 
 # Class
 class PatientInstance:
-    def __init__(self, pt_info, pt_instances, dicom_folder_path):
+    def __init__(self, pt_info, pt_instances, dicom_folder_path, proj_ids=None, segment_ids=None):
+        self.dicom_folder_path = dicom_folder_path
+
+        self.id = None
+        self.sex = None
+        self.birth = None
+        self.acquisition_date = None
+        self.age = None
+        self.spondylarthrosis_present = None
+        self.segments = None
+        self.projections_expected = None
+        self.label = None
+        self.fracture_position = None
+        self.clinical_report = None
+        self.notes = None
+        self.pt_data = []
+
         # Store patient generalities
+        self.store_patient_generalities(pt_info)
+
+        # Read DICOM data
+        self.store_image_data(pt_instances, proj_ids, segment_ids)
+
+    def store_patient_generalities(self, pt_info):
         self.id = pt_info["id"]
         self.sex = pt_info["sex"]
         self.birth = pt_info["birth"]
-        self.acquisition_date = None
-        self.age = None
         self.spondylarthrosis_present = pt_info["spondylarthrosis_present"]
 
         segments = pt_info["segments"].split("-")
@@ -45,16 +65,14 @@ class PatientInstance:
         if self.notes == "nan":
             self.notes = None
 
-        # Read DICOM data
-        self.dicom_folder_path = dicom_folder_path
-        self.pt_data = []
+    def store_image_data(self, pt_instances, proj_ids=None, segment_ids=None):
         for instance in pt_instances:
             _, segment_id = PatientInstance.get_patient_and_segment(instance)
             if "bis" in instance:
                 bis = True
             else:
                 bis = False
-            segment_folder = dicom_folder_path + instance + "/DICOM/"
+            segment_folder = self.dicom_folder_path + instance + "/DICOM/"
             projections = os.listdir(segment_folder)
             if len(projections) == 0:
                 print("Segment", segment_id, "is missing for patient", self.id, "...")
@@ -112,8 +130,8 @@ class PatientInstance:
         return day + "/" + month + "/" + year
 
     @staticmethod
-    def get_patient_and_segment(instance_name):
+    def get_patient_and_segment(instance_name, pt_id_len=3):
         instance_name = list(instance_name)
-        segment = instance_name[3].upper()
-        patient = int("".join(instance_name[0:3]))
+        segment = instance_name[pt_id_len].upper()
+        patient = int("".join(instance_name[0:pt_id_len]))
         return patient, segment

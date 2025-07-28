@@ -23,9 +23,9 @@ from Networks.ConvBaseNetwork import ConvBaseNetwork
 # Class
 class ViTMAETrainer(NetworkTrainer):
     pretrained_model_name = "facebook/vit-mae-base"
-    default_net_params = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
-                          "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                          "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 8, "p_dropout": 0,
+    default_net_params = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 0, "n_conv_segment_layers": 0,
+                          "n_conv_view_layers": 0, "kernel_size": 0, "n_fc_layers": 0, "optimizer": "",
+                          "lr_last": 0, "lr_second_last_factor": 0, "batch_size": 0, "p_dropout": 0,
                           "use_batch_norm": False}
     default_net_type = NetType.BASE_RES_NEXT101
 
@@ -93,8 +93,8 @@ class ViTMAETrainer(NetworkTrainer):
         tensor = torch.einsum("bchw->bhwc", tensor).detach().cpu()
         return tensor
 
-    def visualise_reconstruction(self, img_batch, do_normalise_input=True, title=None):
-        for img in img_batch:
+    def visualise_reconstruction(self, img_batch, do_normalise_input=True, title=None, store_img=False):
+        for i, img in enumerate(img_batch):
             # Get reconstruction
             img = self.inference_data_transforms(img)
             img = img.unsqueeze(0)
@@ -123,9 +123,12 @@ class ViTMAETrainer(NetworkTrainer):
             self.show_img(self.denormalize(y)[0], "Reconstructed patches")
             plt.subplot(1, 4, 4)
             self.show_img(self.denormalize(img_reconstructed)[0], "Final result")
-            if title is not None:
-                plt.title(title)
-            plt.show()
+            if not store_img:
+                plt.show()
+            else:
+                addon = "_" + title.lower().replace(" ", "_") if title is not None else ""
+                plt.savefig(self.results_dir + "ex" + str(i) + addon + ".png", dpi=500, bbox_inches="tight")
+                plt.close()
 
     def denormalize(self, input):
         mean = torch.tensor(self.img_preprocessor.image_mean)
@@ -393,12 +396,12 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_preprocess"
-    epochs1 = 10
-    trial_n1 = None
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "vitmae_optuna"
+    epochs1 = 500
+    trial_n1 = 53
     val_epochs1 = 10
-    use_cuda1 = True
+    use_cuda1 = False
     assess_calibration1 = False
     show_test1 = False
     projection_dataset1 = True
@@ -418,8 +421,8 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define trainer
-    train_parameters1 = {"base_lr": 1e-3, "beta1": 0.9, "beta2": 0.999, "weight_decay": 1e-4, "layer_decay": 0,
-                         "eps": 1e-9, "scheduler": "reduce_lr_on_plateau", "min_lr": 1e-8, "batch_size": 32}
+    train_parameters1 = {"base_lr": 1e-5, "beta1": 0.85, "beta2": 0.9, "weight_decay": 1e-4, "layer_decay": 0.75,
+                         "eps": 1e-9, "scheduler": "reduce_lr_on_plateau", "min_lr": 1e-8, "batch_size": 64}
     trainer1 = ViTMAETrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                              val_data=val_data1, test_data=test_data1, decoder_net_type=None, epochs=epochs1,
                              val_epochs=val_epochs1, decoder_net_params=None, use_cuda=use_cuda1,
@@ -431,7 +434,7 @@ if __name__ == "__main__":
     image1 = Image.open(requests.get(url1, stream=True).raw)
     image1 = transforms.ToTensor()(image1)
     image_batch1 = image1.unsqueeze(0)
-    # trainer1.visualise_reconstruction(image_batch1, do_normalise_input=False)
+    # trainer1.visualise_reconstruction(image_batch1, do_normalise_input=False, title="ImageNet example", store_img=True)
 
     # Apply on an X-ray image
     indices1 = list(range(3))
@@ -452,17 +455,20 @@ if __name__ == "__main__":
     proj_batch1 = torch.stack(proj_list1, 0)
 
     NetworkTrainer.set_seed(111099)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training")
+    # trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+    NetworkTrainer.set_seed(111099)
+    # trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=True)
 
     # Pretrain model
-    new_pretraining1 = True
+    new_pretraining1 = False
     if new_pretraining1:
         NetworkTrainer.set_seed(111099)
         trainer1.pretrain(show_epochs=True)
 
         NetworkTrainer.set_seed(111099)
         trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
-        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")
+        NetworkTrainer.set_seed(111099)
+        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=True)
 
     # Evaluate loaded model
     print()
@@ -474,7 +480,8 @@ if __name__ == "__main__":
 
     NetworkTrainer.set_seed(111099)
     trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training")
+    NetworkTrainer.set_seed(111099)
+    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=True)
 
     # Continue pretraining
     '''if not new_pretraining1:
