@@ -144,12 +144,13 @@ class XrayDataset(Dataset):
         if not flag:
             print("Patient", pt_id, "not found...")
 
-    def count_data(self):
+    def count_data(self, is_extra=False):
         # Define directory for preliminary evaluation
         if self.set_type is None:
             self.preliminary_dir += "pooled/"
         else:
-            self.preliminary_dir += self.set_type.value + "/"
+            addon = "" if not is_extra else "extra_"
+            self.preliminary_dir += addon + self.set_type.value + "/"
 
         # Count patients
         n_pt = len(self.patient_data)
@@ -174,8 +175,10 @@ class XrayDataset(Dataset):
         for pt in self.patient_data:
             for segment in pt.pt_data:
                 # Count fracture segments
-                if segment[0][2] != "":
-                    n_frac_segments += 1
+                for projection in segment:
+                    if projection[2] != "":
+                        n_frac_segments += 1
+                        break
 
                 # Count projections
                 n_projections += len(segment)
@@ -363,26 +366,42 @@ class XrayDataset(Dataset):
                 pt_instances = [name for name in img_names if int(name[:4]) == pt_id]
                 img_segm_pt = [segm_id for i, segm_id in enumerate(img_segm_ids) if img_names[i] in pt_instances]
                 img_proj_pt = [proj_id for i, proj_id in enumerate(img_proj_ids) if img_names[i] in pt_instances]
-                pt_info = {"id": new_id, "sex": pt_instances[0][5], "age": int(pt_instances[0][7:10]), "segments": ["L"]}
+                pt_info = {"id": new_id, "sex": pt_instances[0][5], "age": int(pt_instances[0][7:10]), "segments": ["L"],
+                           "label": 0}
                 self.patient_data.append(ExtraPatientInstance(pt_info, pt_instances, dataset_path, img_proj_pt,
                                                               img_segm_pt))
 
         elif extra_dataset_type == ExtraDatasetType.AASCE:
             img_segm_ids = ["D"] * len(img_names)
-            pt_ids = np.unique([int(name.split("-")[-1][:-4].split(" ")[0]) for name in img_names])
+            pt_ids = []
+            for name in img_names:
+                tmp_id = name.split("-")[-1][:-4]
+                if "coronal" in name:
+                    tmp_id = tmp_id[7:]
+                pt_ids.append(int(tmp_id.split(" ")[0]))
+            pt_ids = np.unique(pt_ids)
 
             new_instances = []
             for pt_id in pt_ids:
                 new_id = ref_id_start + pt_id
                 new_instances.append(str(new_id) + "d")
-                pt_instances = [name for name in img_names if int(name.split("-")[-1][:-4].split(" ")[0]) == pt_id]
+                pt_instances = []
+                for name in img_names:
+                    tmp_id = name.split("-")[-1][:-4]
+                    if "coronal" in name:
+                        tmp_id = tmp_id[7:]
+                    if int(tmp_id.split(" ")[0]) == pt_id:
+                        pt_instances.append(name)
                 img_segm_pt = [segm_id for i, segm_id in enumerate(img_segm_ids) if img_names[i] in pt_instances]
                 img_proj_pt = [proj_id for i, proj_id in enumerate(img_proj_ids) if img_names[i] in pt_instances]
 
                 date = "-".join(pt_instances[0].split("-")[-4:-1])
-                date = datetime.strptime(date, "%d-%B-%Y")
+                try:
+                    date = datetime.strptime(date, "%d-%B-%Y")
+                except ValueError:
+                    date = datetime.strptime(date, "%d-%b-%Y")
                 date = date.strftime("%d/%m/%y")
-                pt_info = {"id": new_id, "segments": ["D"], "acquisition_date": date}
+                pt_info = {"id": new_id, "segments": ["D"], "acquisition_date": date, "label": 0}
                 self.patient_data.append(ExtraPatientInstance(pt_info, pt_instances, dataset_path, img_proj_pt,
                                                               img_segm_pt))
 
@@ -396,10 +415,11 @@ class XrayDataset(Dataset):
                     pt_ids.append(int(name.split("_")[2].split(".")[0]) + 500)
                     img_segm_ids.append("L")
                     img_labels.append("L")
+                    vertebra_names.append("L")
                 else:
                     sep = "-" if "-" in name else "_"
                     pt_ids.append(int(name.split(sep)[0]))
-                    tmp_label = name.split("_")[1][:-4]
+                    tmp_label = name.split("_")[-1][:-4]
                     if tmp_label[0] == "T":
                         tmp_label = "D" + tmp_label[1:]
                     img_segm_ids.append(tmp_label[0])
@@ -432,7 +452,7 @@ class XrayDataset(Dataset):
                         img_proj_pt.append(img_proj_ids[i])
                         img_label_pt.append(img_labels[i])
                         vertebra_name_pt.append(vertebra_names[i])
-                segments = np.unique(img_segm_ids)
+                segments = np.unique(img_segm_ids).tolist()
                 for segm_id in segments:
                     new_instances.append(str(new_id) + segm_id.lower())
 
@@ -589,7 +609,8 @@ if __name__ == "__main__":
     random.seed(seed)
 
     # Define variables
-    working_dir1 = "./../../"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     info_file_name1 = "database_fratture_vertebrali_rx.csv"
     dicom_folder_name1 = "RX colonne anonoimizzate/"
     dataset_name1 = "xray_dataset"
@@ -631,8 +652,10 @@ if __name__ == "__main__":
 
     # Load an already split datasets
     dataset_name1 = "xray_dataset_training"
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
-                                        selected_projection=None)
+    '''dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
+                                        selected_projection=None)'''
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + dataset_name1,
+                                        selected_segments=None, selected_projection=None, correct_mistakes=False)
 
     # Show items
     ind1 = 1
@@ -642,8 +665,13 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    for extra_dataset_type1 in ExtraDatasetType:
+    for extra_dataset_type1 in [ExtraDatasetType.BUU]:
+        print("Processing", extra_dataset_type1.value + "...")
         dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
     dataset1.store_dataset(dataset_name="extended_" + dataset_name1)
+
+    print("-----------------------------------------------------------------------------------------------------------")
+    print("Extended training set:")
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
+    dataset1.count_data(is_extra=True)
