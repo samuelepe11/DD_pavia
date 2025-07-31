@@ -41,7 +41,7 @@ class XrayDataset(Dataset):
         self.results_dir = working_dir + self.results_fold
         self.preliminary_dir = self.results_dir + self.preliminary_fold
         self.jai_dir = self.results_dir + self.jai_fold
-        self.extra_data_dir = working_dir + self.extra_data_folder
+        self.extra_data_dir = working_dir + self.extra_data_fold
 
         self.info_file_path = None
         self.dicom_folder_path = None
@@ -652,10 +652,8 @@ if __name__ == "__main__":
 
     # Load an already split datasets
     dataset_name1 = "xray_dataset_training"
-    '''dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
-                                        selected_projection=None)'''
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + dataset_name1,
-                                        selected_segments=None, selected_projection=None, correct_mistakes=False)
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
+                                        selected_projection=None)
 
     # Show items
     ind1 = 1
@@ -665,7 +663,7 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    for extra_dataset_type1 in [ExtraDatasetType.BUU]:
+    for extra_dataset_type1 in ExtraDatasetType:
         print("Processing", extra_dataset_type1.value + "...")
         dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
     dataset1.store_dataset(dataset_name="extended_" + dataset_name1)

@@ -130,8 +130,8 @@ class PatientInstance:
         return day + "/" + month + "/" + year
 
     @staticmethod
-    def get_patient_and_segment(instance_name, pt_id_len=3):
+    def get_patient_and_segment(instance_name):
         instance_name = list(instance_name)
-        segment = instance_name[pt_id_len].upper()
-        patient = int("".join(instance_name[0:pt_id_len]))
+        segment = instance_name[-1].upper()
+        patient = int("".join(instance_name[:-1]))
         return patient, segment

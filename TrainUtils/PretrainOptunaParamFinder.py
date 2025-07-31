@@ -78,7 +78,7 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
             "eps": 1e-9,
             "scheduler": trial.suggest_categorical("scheduler", ["cosine", "reduce_lr_on_plateau"]),
             "min_lr": 1e-8,
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 4, 6, step=1))),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 6, 7, step=1))),
         }
 
         # Define seeds
@@ -120,10 +120,10 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_optuna"
+    model_name1 = "vitmae_extended_dataset_optuna"
     selected_segments1 = None
     selected_projection1 = None
-    epochs1 = 500
+    epochs1 = 300
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
@@ -131,9 +131,12 @@ if __name__ == "__main__":
     enhance_images1 = False
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
+                                           selected_projection=selected_projection1)'''
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
+                                           selected_segments=selected_segments1, selected_projection=selected_projection1,
+                                           correct_mistakes=False)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
@@ -141,7 +144,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 100
+    n_trials1 = 10
     double_output1 = False
     search_for_untracked_models1 = False
     optuna1 = PretrainOptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,

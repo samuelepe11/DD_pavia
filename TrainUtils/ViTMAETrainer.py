@@ -23,9 +23,9 @@ from Networks.ConvBaseNetwork import ConvBaseNetwork
 # Class
 class ViTMAETrainer(NetworkTrainer):
     pretrained_model_name = "facebook/vit-mae-base"
-    default_net_params = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 0, "n_conv_segment_layers": 0,
-                          "n_conv_view_layers": 0, "kernel_size": 0, "n_fc_layers": 0, "optimizer": "",
-                          "lr_last": 0, "lr_second_last_factor": 0, "batch_size": 0, "p_dropout": 0,
+    default_net_params = {"n_conv_segment_neurons": 1, "n_conv_view_neurons": 1, "n_conv_segment_layers": 1,
+                          "n_conv_view_layers": 1, "kernel_size": 1, "n_fc_layers": 1, "optimizer": "SGD",
+                          "lr_last": 1, "lr_second_last_factor": 1, "batch_size": 1, "p_dropout": 1,
                           "use_batch_norm": False}
     default_net_type = NetType.BASE_RES_NEXT101
 
@@ -395,13 +395,13 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_optuna"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "vitmae_extended_dataset"
     epochs1 = 500
-    trial_n1 = 53
+    trial_n1 = None
     val_epochs1 = 10
-    use_cuda1 = False
+    use_cuda1 = True
     assess_calibration1 = False
     show_test1 = False
     projection_dataset1 = True
@@ -409,11 +409,15 @@ if __name__ == "__main__":
     selected_projection1 = None
     preprocess_inputs1 = False
     enhance_images1 = False
+    store_img1 = False
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
+                                           selected_projection=selected_projection1)'''
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
+                                           selected_segments=selected_segments1, selected_projection=selected_projection1,
+                                           correct_mistakes=False)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
@@ -455,12 +459,12 @@ if __name__ == "__main__":
     proj_batch1 = torch.stack(proj_list1, 0)
 
     NetworkTrainer.set_seed(111099)
-    # trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
+    trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
     NetworkTrainer.set_seed(111099)
-    # trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=True)
+    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=store_img1)
 
     # Pretrain model
-    new_pretraining1 = False
+    new_pretraining1 = True
     if new_pretraining1:
         NetworkTrainer.set_seed(111099)
         trainer1.pretrain(show_epochs=True)
@@ -468,7 +472,7 @@ if __name__ == "__main__":
         NetworkTrainer.set_seed(111099)
         trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
         NetworkTrainer.set_seed(111099)
-        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=True)
+        trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=store_img1)
 
     # Evaluate loaded model
     print()
@@ -481,7 +485,7 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
     trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
     NetworkTrainer.set_seed(111099)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=True)
+    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="After training", store_img=store_img1)
 
     # Continue pretraining
     '''if not new_pretraining1:
