@@ -35,29 +35,61 @@ class MaskSurvey:
                 ### BUON LAVORO!
                 """
     vertebra_names = []
+    checkbox_label = "Non ho individuato alcuna frattura"
+    cropping_ref_name = None
 
-    def __init__(self, dataset, desired_instances, blur=False, dataset_name=None, is_crop_gui=False):
+    def __init__(self, dataset, desired_instances, blur=False, dataset_name=None, is_crop_gui=False, annotators_list=None,
+                 extra_col=0):
         self.users = None
         self.dataset = dataset
         if dataset_name is not None:
             self.mask_fold = dataset_name + "_" + self.mask_fold
         self.mask_dir = dataset.data_dir + self.mask_fold
-        self.max_projection_number = dataset.max_projection_number()
+        self.max_projection_number = dataset.max_projection_number() + extra_col
         self.is_crop_gui = is_crop_gui
 
         self.desired_instances = desired_instances
         random.shuffle(self.desired_instances)
+        self.blur = blur
+
+        self.annotators_list = annotators_list
+        self.assignments = None
+
         print("Item name:")
         for i, name in enumerate(self.desired_instances):
             print(" " + str(i + 1) + ") " + name)
 
-        self.blur = blur
+        if annotators_list is not None:
+            k = len(annotators_list)
+            n = len(self.desired_instances)
+            size = n // k
+            remainder = n % k
 
-    def process_mask(self, name, count, mask_id, adjust_specifics, mask):
-        if count != len(self.desired_instances):
+            self.assignments = {}
+            start = 0
+            for i, annotator in enumerate(annotators_list):
+                extra = 1 if i < remainder else 0
+                end = start + size + extra
+                self.assignments[annotator] = self.desired_instances[start:end]
+                start = end
+
+            for a in self.assignments.keys():
+                print()
+                print("ELEMENTS FOR", a.upper())
+                print("Item name:")
+                for i, name in enumerate(self.assignments[a]):
+                    print(" " + str(i + 1) + ") " + name)
+
+    def process_mask(self, name, count, count_all, mask_id, adjust_specifics, mask):
+        if self.annotators_list is None:
+            desired_instances = self.desired_instances
+        else:
+            desired_instances = self.assignments[name]
+
+        if count != len(desired_instances):
             # Define mask name
             pt_folder = self.mask_dir + name
-            img_name = self.desired_instances[count]
+            img_name = desired_instances[count]
             segment_dir = pt_folder + "/" + img_name
             if img_name not in os.listdir(pt_folder):
                 os.mkdir(segment_dir)
@@ -88,8 +120,8 @@ class MaskSurvey:
         return {"background": img, "layers": [], "composite": None} if not self.is_crop_gui else {"image": img,
                                                                                                   "boxes": []}
 
-    def avoid_clear_action(self, count, mask_id, adjust_specifics):
-        _, img = self.get_img(mask_id=mask_id, count=count)
+    def avoid_clear_action(self, count_all, mask_id, adjust_specifics):
+        _, img = self.get_img(mask_id=mask_id, count_all=count_all)
 
         mask = gr.update(value=self.get_val(img))
         bright = self.normal_scale_value
@@ -98,8 +130,8 @@ class MaskSurvey:
 
         return mask, bright, contrast, adjust_specifics
 
-    def adjust_img(self, bright, contrast, adjust_specifics, count, mask_id):
-        _, img = self.get_img(mask_id=mask_id, count=count)
+    def adjust_img(self, bright, contrast, adjust_specifics, count_all, mask_id):
+        _, img = self.get_img(mask_id=mask_id, count_all=count_all)
 
         # Adjust brightness
         img = np.int32(img + 255 * (bright - self.normal_scale_value) / self.normal_scale_value)
@@ -124,7 +156,7 @@ class MaskSurvey:
         mask = gr.update(value=self.get_val(img))
         return mask
 
-    def rotate_img(self, bright, contrast, adjust_specifics, count, mask_id):
+    def rotate_img(self, bright, contrast, adjust_specifics, count_all, mask_id):
         rotate_id = adjust_specifics[mask_id, 0] + 1
         adjust_specifics[mask_id, 0] = rotate_id % 4
 
@@ -138,33 +170,33 @@ class MaskSurvey:
             gr.Warning("ATTENZIONE! L'operazione 'Capovolgi' è stata annullata. Ti consiglio di definire prima "
                        "l'orientazione dell'immmagine e specchiarla o capovolgerla solo in seguito.")
 
-        mask = self.adjust_img(bright, contrast, adjust_specifics, count, mask_id)
+        mask = self.adjust_img(bright, contrast, adjust_specifics, count_all, mask_id)
         return mask, adjust_specifics
 
-    def flip_vert_img(self, bright, contrast, adjust_specifics, count, mask_id):
-        mask, adjust_specifics = self.flip_img(1, bright, contrast, adjust_specifics, count, mask_id)
-
-        return mask, adjust_specifics
-
-    def flip_horiz_img(self, bright, contrast, adjust_specifics, count, mask_id):
-        mask, adjust_specifics = self.flip_img(2, bright, contrast, adjust_specifics, count, mask_id)
+    def flip_vert_img(self, bright, contrast, adjust_specifics, count_all, mask_id):
+        mask, adjust_specifics = self.flip_img(1, bright, contrast, adjust_specifics, count_all, mask_id)
 
         return mask, adjust_specifics
 
-    def flip_img(self, direction_ind, bright, contrast, adjust_specifics, count, mask_id):
+    def flip_horiz_img(self, bright, contrast, adjust_specifics, count_all, mask_id):
+        mask, adjust_specifics = self.flip_img(2, bright, contrast, adjust_specifics, count_all, mask_id)
+
+        return mask, adjust_specifics
+
+    def flip_img(self, direction_ind, bright, contrast, adjust_specifics, count_all, mask_id):
         adjust_specifics[mask_id, direction_ind] = 1 - adjust_specifics[mask_id, direction_ind]
-        mask = self.adjust_img(bright, contrast, adjust_specifics, count, mask_id)
+        mask = self.adjust_img(bright, contrast, adjust_specifics, count_all, mask_id)
 
         return mask, adjust_specifics
 
-    def get_img(self, mask_id, item=None, count=None, first_display=False, return_label=False):
+    def get_img(self, mask_id, item=None, count_all=None, first_display=False, return_label=False):
         if first_display:
             projection_id = ProjectionType.AP
             img = np.zeros((1000, 1000))
             label = ""
         else:
             if item is None:
-                item, _ = self.dataset.__getitem__(count)
+                item, _ = self.dataset.__getitem__(count_all)
             projection_id, img, label = item[mask_id]
 
             img = np.int32(img / np.max(img) * 255)
@@ -175,8 +207,13 @@ class MaskSurvey:
         else:
             return projection_id, img, label
 
-    def next_img(self, count, name, box, ok_flag):
-        if count != len(self.desired_instances):
+    def next_img(self, count, count_all, name, box, ok_flag):
+        if self.annotators_list is None:
+            desired_instances = self.desired_instances
+        else:
+            desired_instances = self.assignments[name]
+
+        if count != len(desired_instances):
             # Verify if task is completed
             if not box and not ok_flag:
                 # Generate warning
@@ -189,61 +226,64 @@ class MaskSurvey:
                                + "l'inconsistenza, ti chiediamo di comunicarci via mail se le maschere caricate sono "
                                + "errate.")
                 elif box and not ok_flag:
-                    img_name = self.desired_instances[count]
+                    img_name = desired_instances[count]
                     if not self.is_crop_gui:
                         # Create an empty folder for the non-fracture segments
                         pt_folder = self.mask_dir + name
                         if img_name not in os.listdir(pt_folder):
                             os.mkdir(pt_folder + "/" + img_name)
                     else:
-                        cropping_ref_name = "cropping_ref.csv"
-                        if cropping_ref_name not in os.listdir(self.mask_dir):
+                        user_folder = self.mask_dir + name + "/"
+                        if self.cropping_ref_name not in os.listdir(user_folder):
                             cropping_ref = pd.DataFrame(
                                 columns=["file_name", "segment", "projection_id", "projection", "width", "height",
-                                         "vertebra_name", "x_min", "x_max", "y_min", "y_max", "fracture_present", "annotator"])
+                                         "vertebra_name", "x_min", "x_max", "y_min", "y_max", "fracture_present",
+                                         "annotator", "timestamp", "annotator_counter", "global_counter"])
                         else:
-                            cropping_ref = pd.read_csv(self.mask_dir + cropping_ref_name)
+                            cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name)
 
-                        item, _ = self.dataset.__getitem__(count)
+                        item, _ = self.dataset.__getitem__(count_all)
                         for i, element in enumerate(item):
                             projection_id, img, fracture_pos = element
-                            fig = plt.figure()
-                            ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
-                            ax.axis("off")
-                            plt.imshow(img, "gray")
-                            cropped_img_name = img_name + "_proj" + str(i) + "_all.png"
-                            plt.savefig(self.mask_dir + "/" + cropped_img_name, bbox_inches="tight", pad_inches=0,
-                                        dpi=600)
-                            plt.close(fig)
 
                             vertebra_name = img_name[-1]
                             vertebra_name = vertebra_name.upper() if vertebra_name != "s" else "SC"
                             fracture_present = fracture_pos != ""
-                            row = {"file_name": cropped_img_name, "segment": img_name, "projection": i,
+                            now = datetime.now(tz=pytz.timezone("Europe/Rome"))
+                            now = now.strftime("%m-%d-%Y %H:%M:%S")
+                            row = {"file_name": "", "segment": img_name, "projection": i,
                                    "projection_type": projection_id.value, "width": img.shape[1], "height": img.shape[0],
                                    "vertebra_name": vertebra_name, "x_min": 0, "x_max": img.shape[1], "y_min": 0,
-                                   "y_max": img.shape[0], "fracture_present": fracture_present, "annotator": name}
+                                   "y_max": img.shape[0], "fracture_present": fracture_present, "annotator": name,
+                                   "timestamp": now, "annotator_counter": count, "global_counter": count_all}
                             cropping_ref.loc[len(cropping_ref)] = row
-                        cropping_ref.to_csv(self.mask_dir + cropping_ref_name, index=False)
+                        cropping_ref.to_csv(user_folder + self.cropping_ref_name, index=False)
 
                 count += 1
+                count_all += 1
 
         # Get next images
-        if count == len(self.desired_instances):
+        if count == len(desired_instances):
             out_txt = "GRAZIE PER IL TUO CONTRIBUTO! Ora puoi chiudere l'applicazione."
             addon = [gr.update(val="-")] if self.is_crop_gui else []
             mask_blocks = self.max_projection_number * (5 * [self.avoid_interaction] + addon + [self.empty_mask_update] +
                                                         [gr.update(icon="icons/unchecked.png", interactive=True)])
         else:
-            instance = self.desired_instances[count]
+            instance = desired_instances[count]
             _, segment = PatientInstance.get_patient_and_segment(instance)
-            out_txt = self.get_label(count, segment)
-            item, _ = self.dataset.__getitem__(count)
+            out_txt = self.get_label(count, segment, name)
+            item, _ = self.dataset.__getitem__(count_all)
             mask_blocks = []
             for j in range(self.max_projection_number):
                 addon = []
                 try:
                     projection_id, img = self.get_img(mask_id=j, item=item)
+                    flag = True
+                except IndexError:
+                    img = np.zeros((1000, 1000))
+                    flag = False
+
+                if flag:
                     label = "Vista: " + projection_id.translated_value()
 
                     # Enable tools and update image
@@ -257,17 +297,18 @@ class MaskSurvey:
                                                show_label=True, interactive=True)] +
                                     [gr.update(icon="icons/unchecked.png", interactive=True)])
 
-                except IndexError:
+                else:
                     # Disable tools and update image
                     if self.is_crop_gui:
                         addon = [gr.update(value="-")]
-                    mask_blocks += (5 * [self.avoid_interaction] + addon + [self.empty_mask_update] +
+                    mask_blocks += (5 * [self.avoid_interaction] + addon + [gr.update(value=self.get_val(img),
+                                                                                      show_label=False, interactive=False)] +
                                     [gr.update(icon="icons/unchecked.png", interactive=False)])
 
         adjust_specifics = np.zeros((self.max_projection_number, 3))
         box = False
         ok_flag = False
-        return out_txt, count, box, ok_flag, adjust_specifics, *mask_blocks
+        return out_txt, count, count_all, box, ok_flag, adjust_specifics, *mask_blocks
 
     def change_page(self, name):
         # Check for name correctness
@@ -275,7 +316,11 @@ class MaskSurvey:
             if char in name:
                 gr.Warning("ATTENZIONE! Il tuo nominativo non può contenere nessuno dei seguenti caratteri:\n"
                            "^ ~ \" # % & * : < > ? / \\ { } |")
-                return name, -1, gr.update(), gr.update()
+                return name, -1, -1, gr.update(), gr.update()
+
+        if self.annotators_list is not None and name not in self.annotators_list:
+            gr.Warning("ATTENZIONE! Nome utente non valido: ricorda di utilizzare il tuo cognome in minuscolo.")
+            return name, -1, -1, gr.update(), gr.update()
 
         # Create folder
         if name == "":
@@ -287,28 +332,49 @@ class MaskSurvey:
                 os.mkdir(pt_folder)
 
             # Assess already evaluated instances
+            if self.annotators_list is None:
+                desired_instances = self.desired_instances
+            else:
+                desired_instances = self.assignments[name]
+
             annotated_segments = []
-            for instance in self.desired_instances:
+            for instance in desired_instances:
                 if instance in os.listdir(pt_folder):
                     annotated_segments.append(instance)
             count = len(annotated_segments)
 
         else:
             # Assess already evaluated instances
-            annotated_segments = np.unique([image[:4] for image in os.listdir(self.mask_dir) if image[-3:] == "png"])
-            count = len(annotated_segments)
+            if name not in os.listdir(self.mask_dir):
+                os.mkdir(self.mask_dir + name)
+
+            user_folder = self.mask_dir + name + "/"
+            if self.cropping_ref_name in os.listdir(user_folder):
+                cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name)
+                annotated_segments = cropping_ref["segment"].unique().tolist()
+                count = len(annotated_segments)
+            else:
+                count = 0
 
         if count > 0:
             count -= 2
         else:
             count = -1
 
+        count_all = count
+        if self.annotators_list is not None:
+            for a in self.annotators_list:
+                if a == name:
+                    break
+                count_all += len(self.assignments[a])
+
         tab1 = gr.update(interactive=False)
         tab2 = gr.update(interactive=True)
-        return name, count, tab1, tab2
+        return name, count, count_all, tab1, tab2
 
     def display_images(self, block):
         count = gr.State(0)
+        count_all = gr.State(0)
 
         # Add initial fields
         with gr.Tab(label="Autenticazione utente", interactive=True) as tab1:
@@ -325,8 +391,9 @@ class MaskSurvey:
             mask_blocks = []
             with gr.Row():
                 for i in range(self.max_projection_number):
-                    with gr.Column(min_width=200):
+                    with gr.Column(min_width=400):
                         # Get image
+                        gr.HTML("<h3 style='text-align:center;'>PROJECTION " + str(i + 1) + "</h3>")
                         projection_id, img = self.get_img(mask_id=i, first_display=True)
                         label = "Vista: " + projection_id.translated_value()
                         show_label = True
@@ -387,39 +454,44 @@ class MaskSurvey:
 
                         # Add action listeners
                         if img is not None:
-                            bright.release(fn=self.adjust_img, inputs=[bright, contrast, adjust_specifics, count, mask_id],
+                            bright.release(fn=self.adjust_img, inputs=[bright, contrast, adjust_specifics, count_all, mask_id],
                                            outputs=[mask])
                             contrast.release(fn=self.adjust_img,
-                                             inputs=[bright, contrast, adjust_specifics, count, mask_id],
+                                             inputs=[bright, contrast, adjust_specifics, count_all, mask_id],
                                              outputs=[mask])
                             rotate.click(fn=self.rotate_img,
-                                         inputs=[bright, contrast, adjust_specifics, count, mask_id],
+                                         inputs=[bright, contrast, adjust_specifics, count_all, mask_id],
                                          outputs=[mask, adjust_specifics])
                             flip_vert.click(fn=self.flip_vert_img,
-                                            inputs=[bright, contrast, adjust_specifics, count, mask_id],
+                                            inputs=[bright, contrast, adjust_specifics, count_all, mask_id],
                                             outputs=[mask, adjust_specifics])
                             flip_horiz.click(fn=self.flip_horiz_img,
-                                             inputs=[bright, contrast, adjust_specifics, count, mask_id],
+                                             inputs=[bright, contrast, adjust_specifics, count_all, mask_id],
                                              outputs=[mask, adjust_specifics])
-                            mask.clear(fn=self.avoid_clear_action, inputs=[count, mask_id, adjust_specifics],
+                            mask.clear(fn=self.avoid_clear_action, inputs=[count_all, mask_id, adjust_specifics],
                                        outputs=[mask, bright, contrast, adjust_specifics])
                             button.click(fn=self.notify_click, inputs=[mask_id])
-                            button.click(fn=self.process_mask, inputs=[name, count, mask_id, adjust_specifics, mask],
+                            button.click(fn=self.process_mask, inputs=[name, count, count_all, mask_id, adjust_specifics, mask],
                                          outputs=[button, name, ok_flag])
 
             # Add final buttons
-            box = gr.Checkbox(label="Non ho individuato alcuna frattura")
+            box = gr.Checkbox(label=self.checkbox_label)
             next_button = gr.Button(value="Vai al prossimo gruppo di immagini", icon="icons/next.png")
-            next_button.click(fn=self.next_img, inputs=[count, name, box, ok_flag],
-                              outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks)
-        start.click(fn=self.change_page, inputs=[name], outputs=[name, count, tab1, tab2], concurrency_id="start",
+            next_button.click(fn=self.next_img, inputs=[count, count_all, name, box, ok_flag],
+                              outputs=[txt, count, count_all, box, ok_flag, adjust_specifics] + mask_blocks)
+        start.click(fn=self.change_page, inputs=[name], outputs=[name, count, count_all, tab1, tab2], concurrency_id="start",
                     concurrency_limit=1)
-        start.click(fn=self.next_img, inputs=[count, name, gr.State(False), gr.State(True)],
-                    outputs=[txt, count, box, ok_flag, adjust_specifics] + mask_blocks, concurrency_id="start",
+        start.click(fn=self.next_img, inputs=[count, count_all, name, gr.State(False), gr.State(True)],
+                    outputs=[txt, count, count_all, box, ok_flag, adjust_specifics] + mask_blocks, concurrency_id="start",
                     concurrency_limit=1)
 
-    def get_label(self, counter, segment):
-        return ("Segmento  " + str(counter + 1) + " / " + str(len(self.desired_instances)) +
+    def get_label(self, counter, segment, name):
+        if self.annotators_list is None:
+            desired_instances = self.desired_instances
+        else:
+            desired_instances = self.assignments[name]
+
+        return ("Segmento  " + str(counter + 1) + " / " + str(len(desired_instances)) +
                 "   -   Segmento " + XrayDataset.get_segment_name_ita(segment))
 
     def build_app(self):

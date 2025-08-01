@@ -395,8 +395,8 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    # working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    working_dir1 = "./../../"
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "vitmae_extended_dataset"
     epochs1 = 500
     trial_n1 = None
@@ -412,9 +412,9 @@ if __name__ == "__main__":
     store_img1 = False
 
     # Load data
-    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)'''
+                                           selected_projection=selected_projection1)
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
                                            selected_segments=selected_segments1, selected_projection=selected_projection1,
                                            correct_mistakes=False)
