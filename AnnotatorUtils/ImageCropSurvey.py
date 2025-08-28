@@ -129,6 +129,8 @@ class ImageCropSurvey(MaskSurvey):
                        "vertebra_name": tmp_vertebra_name, "x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max,
                        "fracture_present": fracture_presents[i], "annotator": name, "timestamp": now,
                        "annotator_counter": count, "global_counter": count_all}
+                print("-----------------------------------------------------------------------------------------------")
+                print(row)
                 cropping_ref.loc[len(cropping_ref)] = row
 
             # Store cropping references
@@ -158,7 +160,7 @@ if __name__ == "__main__":
 
     # Launch app
     blur1 = False
-    annotators_list1 = ["pe1", "pe2", "pe3"] #["salina", "ciccone", "brevi"]
+    annotators_list1 = ["salina", "ciccone", "brevi"]
     survey = ImageCropSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, dataset_name=dataset_name1,
                              blur=blur1, annotators_list=annotators_list1, extra_col=1)
     print("Add '?__theme=dark' at the end of the link")

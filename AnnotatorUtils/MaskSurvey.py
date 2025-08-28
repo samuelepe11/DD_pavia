@@ -241,23 +241,15 @@ class MaskSurvey:
                                          "annotator", "timestamp", "annotator_counter", "global_counter"])
                         else:
                             cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name)
-
-                        item, _ = self.dataset.__getitem__(count_all)
-                        for i, element in enumerate(item):
-                            projection_id, img, fracture_pos = element
-
-                            vertebra_name = img_name[-1]
-                            vertebra_name = vertebra_name.upper() if vertebra_name != "s" else "SC"
-                            fracture_present = fracture_pos != ""
                             now = datetime.now(tz=pytz.timezone("Europe/Rome"))
                             now = now.strftime("%m-%d-%Y %H:%M:%S")
-                            row = {"file_name": "", "segment": img_name, "projection": i,
-                                   "projection_type": projection_id.value, "width": img.shape[1], "height": img.shape[0],
-                                   "vertebra_name": vertebra_name, "x_min": 0, "x_max": img.shape[1], "y_min": 0,
-                                   "y_max": img.shape[0], "fracture_present": fracture_present, "annotator": name,
+                            row = {"file_name": "", "segment": img_name, "projection": "",
+                                   "projection_type": "", "width": "", "height": "",
+                                   "vertebra_name": "", "x_min": "", "x_max": "", "y_min": "",
+                                   "y_max": "", "fracture_present": "", "annotator": name,
                                    "timestamp": now, "annotator_counter": count, "global_counter": count_all}
                             cropping_ref.loc[len(cropping_ref)] = row
-                        cropping_ref.to_csv(user_folder + self.cropping_ref_name, index=False)
+                            cropping_ref.to_csv(user_folder + self.cropping_ref_name, index=False)
 
                 count += 1
                 count_all += 1
@@ -265,7 +257,7 @@ class MaskSurvey:
         # Get next images
         if count == len(desired_instances):
             out_txt = "GRAZIE PER IL TUO CONTRIBUTO! Ora puoi chiudere l'applicazione."
-            addon = [gr.update(val="-")] if self.is_crop_gui else []
+            addon = [gr.update(val="")] if self.is_crop_gui else []
             mask_blocks = self.max_projection_number * (5 * [self.avoid_interaction] + addon + [self.empty_mask_update] +
                                                         [gr.update(icon="icons/unchecked.png", interactive=True)])
         else:
@@ -300,7 +292,7 @@ class MaskSurvey:
                 else:
                     # Disable tools and update image
                     if self.is_crop_gui:
-                        addon = [gr.update(value="-")]
+                        addon = [gr.update(value="")]
                     mask_blocks += (5 * [self.avoid_interaction] + addon + [gr.update(value=self.get_val(img),
                                                                                       show_label=False, interactive=False)] +
                                     [gr.update(icon="icons/unchecked.png", interactive=False)])
@@ -393,7 +385,7 @@ class MaskSurvey:
                 for i in range(self.max_projection_number):
                     with gr.Column(min_width=400):
                         # Get image
-                        gr.HTML("<h3 style='text-align:center;'>PROJECTION " + str(i + 1) + "</h3>")
+                        gr.HTML("<h3 style='text-align:center;'>PROIEZIONE " + str(i + 1) + "</h3>")
                         projection_id, img = self.get_img(mask_id=i, first_display=True)
                         label = "Vista: " + projection_id.translated_value()
                         show_label = True
