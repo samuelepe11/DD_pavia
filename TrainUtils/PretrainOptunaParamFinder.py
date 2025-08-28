@@ -23,12 +23,14 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, epochs, val_epochs, use_cuda,
                  n_trials, projection_dataset=False, double_output=False, search_for_untracked_models=False,
-                 preprocess_inputs=False, enhance_images=False):
+                 preprocess_inputs=False, enhance_images=False, show_epochs=False):
         super().__init__(model_name, working_dir, train_data, val_data, test_data, net_type=None, epochs=epochs,
                          val_epochs=val_epochs, use_cuda=use_cuda, n_trials=n_trials, s3=None, n_parallel_gpu=0,
                          projection_dataset=projection_dataset, output_metric="loss", double_output=double_output,
                          search_for_untracked_models=search_for_untracked_models, preprocess_inputs=preprocess_inputs,
                          enhance_images=enhance_images, full_size=False, direction="minimize", is_pretrain=True)
+
+        self.show_epochs = show_epochs
 
     def retrieve_untracked_models(self, distributions):
         if self.search_for_untracked_models:
@@ -76,9 +78,9 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
             "weight_decay": np.round(10 ** (-1 * trial.suggest_int("weight_decay", 1, 5, step=1)), decimals=5),
             "layer_decay": np.round(trial.suggest_float("layer_decay", 0, 0.75, step=0.75), decimals=2),
             "eps": 1e-9,
-            "scheduler": trial.suggest_categorical("scheduler", ["cosine", "reduce_lr_on_plateau"]),
+            "scheduler": "reduce_lr_on_plateau",  # trial.suggest_categorical("scheduler", ["cosine", "reduce_lr_on_plateau"]),
             "min_lr": 1e-8,
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 6, 7, step=1))),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 6, 7, step=1))),  # int(2 ** (trial.suggest_int("batch_size", 4, 6, step=1))),
         }
 
         # Define seeds
@@ -95,7 +97,7 @@ class PretrainOptunaParamFinder(OptunaParamFinder):
                                     use_cuda=self.use_cuda, projection_dataset=self.projection_dataset,
                                     preprocess_inputs=self.preprocess_inputs, enhance_images=self.enhance_images,
                                     train_parameters=params)
-            val_loss = trainer.pretrain(show_epochs=False, trial_n=self.counter-1, trial=trial,
+            val_loss = trainer.pretrain(show_epochs=self.show_epochs, trial_n=self.counter-1, trial=trial,
                                         double_output=self.double_output, continue_training=False)
             print("Value:", val_loss)
             if self.double_output:
@@ -120,10 +122,10 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_extended_dataset_optuna"
+    model_name1 = "vitmae_extended_dataset_optuna_400"
     selected_segments1 = None
     selected_projection1 = None
-    epochs1 = 300
+    epochs1 = 400
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
@@ -131,12 +133,12 @@ if __name__ == "__main__":
     enhance_images1 = False
 
     # Load data
-    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)'''
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
+                                           selected_projection=selected_projection1)
+    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
                                            selected_segments=selected_segments1, selected_projection=selected_projection1,
-                                           correct_mistakes=False)
+                                           correct_mistakes=False)'''
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
@@ -144,15 +146,17 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 10
+    n_trials1 = 20
     double_output1 = False
     search_for_untracked_models1 = False
+    show_epochs1 = True
     optuna1 = PretrainOptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                         val_data=val_data1, test_data=test_data1, epochs=epochs1,
                                         val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                         projection_dataset=projection_dataset1, double_output=double_output1,
                                         search_for_untracked_models=search_for_untracked_models1,
-                                        preprocess_inputs=preprocess_inputs1, enhance_images=enhance_images1)
+                                        preprocess_inputs=preprocess_inputs1, enhance_images=enhance_images1,
+                                        show_epochs=show_epochs1)
     # Run search
     optuna1.initialize_study()
 

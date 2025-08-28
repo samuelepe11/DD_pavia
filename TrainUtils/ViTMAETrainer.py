@@ -30,7 +30,7 @@ class ViTMAETrainer(NetworkTrainer):
     default_net_type = NetType.BASE_RES_NEXT101
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, decoder_net_type, epochs, val_epochs,
-                 convergence_patience=10, convergence_thresh=1e-3, decoder_net_params=None, use_cuda=True,
+                 convergence_patience=5, convergence_thresh=1e-3, decoder_net_params=None, use_cuda=True,
                  projection_dataset=False, preprocess_inputs=False, enhance_images=False, train_parameters=None):
         super().__init__(model_name, working_dir, train_data, val_data, test_data, net_type=decoder_net_type,
                          epochs=epochs, val_epochs=val_epochs, convergence_patience=convergence_patience,
@@ -395,8 +395,8 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "vitmae_extended_dataset"
     epochs1 = 500
     trial_n1 = None
@@ -412,9 +412,9 @@ if __name__ == "__main__":
     store_img1 = False
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
+                                           selected_projection=selected_projection1)'''
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
                                            selected_segments=selected_segments1, selected_projection=selected_projection1,
                                            correct_mistakes=False)
