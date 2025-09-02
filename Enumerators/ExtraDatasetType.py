@@ -7,6 +7,7 @@ class ExtraDatasetType(Enum):
     BUU = "Burapha LSPINE dataset"
     AASCE = "Accurate Automated Spinal Curvature Estimation MICCAI 2019 dataset"
     DD = "Original cropped dataset from the Donald Duck project"
+    CROPPED = "Original cropped dataset from Donald Duck project - Pavia variant"
 
     def get_dataset_name(self):
         if self == ExtraDatasetType.BUU:
@@ -15,6 +16,8 @@ class ExtraDatasetType(Enum):
             return "AASCE_MICCAI"
         elif self == ExtraDatasetType.DD:
             return "DD_bicocca"
+        elif self == ExtraDatasetType.CROPPED:
+            return "pooled"
         else:
             return None
 
@@ -26,4 +29,4 @@ class ExtraDatasetType(Enum):
         elif self == ExtraDatasetType.DD:
             return 30000
         else:
-            return None
+            return 0

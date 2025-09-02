@@ -240,6 +240,7 @@ class ViTMAETrainer(NetworkTrainer):
         if trial_n is None:
             self.save_model()
         else:
+            NetworkTrainer.set_seed(111099)
             train_loss, val_loss = self.summarize_performance_pretrain(show_test=False, show_process=False,
                                                                        trial_n=trial_n)
             if double_output:

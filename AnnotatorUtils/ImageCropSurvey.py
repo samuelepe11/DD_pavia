@@ -8,6 +8,8 @@ import gradio as gr
 import numpy as np
 import pandas as pd
 import pytz
+import ast
+import shutil
 from datetime import datetime
 
 from DataUtils.XrayDataset import XrayDataset
@@ -143,6 +145,64 @@ class ImageCropSurvey(MaskSurvey):
             ok_flag = False
         return button, name, ok_flag
 
+    def check_collected_masks(self, round_precision=2):
+        # Read command line output
+        command_line_output = []
+        with open(self.mask_dir + "command_line_output.txt", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    row = ast.literal_eval(line)
+                    command_line_output.append(row)
+        command_line_output = pd.DataFrame(command_line_output)
+        command_line_output = command_line_output.drop_duplicates(ignore_index=True)
+
+        # Recover missing references
+        for user in self.annotators_list:
+            user_folder = self.mask_dir + user + "/"
+            cropped_patches = [file for file in os.listdir(user_folder) if ".csv" not in file]
+            cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name)
+            original_n_rows = len(cropping_ref)
+            unreferenced_patches = set(cropped_patches) - set(cropping_ref.file_name)
+            print(user.upper(), "has", len(unreferenced_patches), "missing references...")
+
+            for patch_name in unreferenced_patches:
+                missing_row = command_line_output[command_line_output["file_name"] == patch_name]
+                if len(missing_row) == 0:
+                    print(patch_name, "not found!")
+                else:
+                    cropping_ref = pd.concat([cropping_ref, missing_row], ignore_index=True)
+            print(" >", len(cropping_ref) - original_n_rows, "references recovered for", user.upper())
+
+            cropping_ref = cropping_ref.sort_values(by=["global_counter", "file_name"], ascending=[True, True])
+            cropping_ref.to_csv(user_folder + "adjusted_" + self.cropping_ref_name, index=False)
+
+    def pool_collected_masks(self):
+        print("\nPooling procedure starting...")
+        mask_dir = self.mask_dir + "pooled/"
+        if "pooled" not in os.listdir(self.mask_dir):
+            os.mkdir(mask_dir)
+
+        cropping_refs = []
+        for user in self.annotators_list:
+            user_folder = self.mask_dir + user + "/"
+            cropping_ref = pd.read_csv(user_folder + "adjusted_" + self.cropping_ref_name)
+            for row in cropping_ref.itertuples(index=False):
+                vertebra_name = row.vertebra_name
+                file_name = row.file_name
+                if vertebra_name == "S" or len(vertebra_name) > 1:
+                    root = "_".join(file_name.split("_")[:-1])
+                    most_recent_patch = cropping_ref[cropping_ref["file_name"].str.startswith(root)].file_name.max()
+                    if file_name != most_recent_patch:
+                        print(" >", file_name, "discharged")
+                        continue
+                src_path = os.path.join(user_folder, file_name)
+                dst_path = os.path.join(mask_dir, file_name)
+                shutil.copy2(src_path, dst_path)
+                cropping_refs.append(row)
+        cropping_refs = pd.DataFrame(cropping_refs)
+        cropping_refs.to_csv(mask_dir + "pooled_" + self.cropping_ref_name, index=False)
+
 
 # Main
 if __name__ == "__main__":
@@ -164,4 +224,10 @@ if __name__ == "__main__":
     survey = ImageCropSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, dataset_name=dataset_name1,
                              blur=blur1, annotators_list=annotators_list1, extra_col=1)
     print("Add '?__theme=dark' at the end of the link")
-    survey.build_app()
+    # survey.build_app()
+
+    # Check masks
+    # survey.check_collected_masks()
+
+    # Pool masks
+    # survey.pool_collected_masks()
