@@ -398,11 +398,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_extended_dataset"
+    model_name1 = "vitmae_extended_dataset_optuna"
     epochs1 = 500
-    trial_n1 = None
+    trial_n1 = 12
     val_epochs1 = 10
-    use_cuda1 = True
+    use_cuda1 = False
     assess_calibration1 = False
     show_test1 = False
     projection_dataset1 = True
@@ -410,15 +410,15 @@ if __name__ == "__main__":
     selected_projection1 = None
     preprocess_inputs1 = False
     enhance_images1 = False
-    store_img1 = False
+    store_img1 = True
 
     # Load data
-    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)'''
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
+                                           selected_projection=selected_projection1)
+    '''rain_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
                                            selected_segments=selected_segments1, selected_projection=selected_projection1,
-                                           correct_mistakes=False)
+                                           correct_mistakes=False)'''
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=store_img1)
 
     # Pretrain model
-    new_pretraining1 = True
+    new_pretraining1 = False
     if new_pretraining1:
         NetworkTrainer.set_seed(111099)
         trainer1.pretrain(show_epochs=True)

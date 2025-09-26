@@ -122,10 +122,10 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "vitmae_extended_dataset_optuna_400"
+    model_name1 = "vitmae_extended_dataset_optuna"
     selected_segments1 = None
     selected_projection1 = None
-    epochs1 = 400
+    epochs1 = 500
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
@@ -133,12 +133,12 @@ if __name__ == "__main__":
     enhance_images1 = False
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
-    '''train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
+                                           selected_projection=selected_projection1)'''
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_xray_dataset_training",
                                            selected_segments=selected_segments1, selected_projection=selected_projection1,
-                                           correct_mistakes=False)'''
+                                           correct_mistakes=False)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
@@ -146,10 +146,10 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 20
+    n_trials1 = 50
     double_output1 = False
     search_for_untracked_models1 = False
-    show_epochs1 = True
+    show_epochs1 = False
     optuna1 = PretrainOptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                         val_data=val_data1, test_data=test_data1, epochs=epochs1,
                                         val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
