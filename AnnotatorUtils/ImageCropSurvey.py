@@ -24,7 +24,7 @@ class ImageCropSurvey(MaskSurvey):
                                   interactive=True)
 
     intro_msg = """
-                # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Evidence-First per Diagnosi e Pianificazione di Terapie
+                # Judicial AI in Riabilitazione: Sviluppo di Sistemi di Supporto Decisionale Evidence-First per Diagnosi e Valutazione di Terapie
                 #### Dopo aver inserito il tuo nominativo, vedrai in successione delle immagini radiografiche relative a più soggetti: ogni gruppo di immagini rappresenta più proiezioni dello stesso segmento vertebrale di ogni paziente.
                 #### In ogni immagine saranno presenti più vertebre: ti chiediamo di evidenziarle con riquadri differenti. Ti invitiamo a contornare la zona con adeguata precisione. Sarà necessario contornare solo le vertebre interamente presenti nell'immagine.
                 #### Qualora non fosse possibile identificare vertebre in nessuna immagine del set, segnalalo con l'apposito checkbox in fondo alla pagina.\n
@@ -148,7 +148,7 @@ class ImageCropSurvey(MaskSurvey):
     def check_collected_masks(self, round_precision=2):
         # Read command line output
         command_line_output = []
-        with open(self.mask_dir + "command_line_output.txt", "r") as f:
+        with open(self.mask_dir + "../command_line_output.txt", "r") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("{") and line.endswith("}"):
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     # survey.build_app()
 
     # Check masks
-    # survey.check_collected_masks()
+    survey.check_collected_masks()
 
     # Pool masks
-    # survey.pool_collected_masks()
+    survey.pool_collected_masks()
