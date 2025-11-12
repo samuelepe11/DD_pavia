@@ -156,6 +156,8 @@ class XrayDataset(Dataset):
                 addon = "cropped_"
             else:
                 addon = ""
+            if addon + self.set_type.value not in os.listdir(self.preliminary_dir):
+                os.mkdir(self.preliminary_dir + addon + self.set_type.value)
             self.preliminary_dir += addon + self.set_type.value + "/"
 
         # Count patients
@@ -690,8 +692,8 @@ if __name__ == "__main__":
 
     # Load an already split datasets
     dataset_name1 = "xray_dataset_training"
-    '''dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
-                                        selected_projection=None)'''
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
+                                        selected_projection=None)
 
     # Show items
     ind1 = 1
@@ -701,17 +703,17 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    extra_dataset_types1 = [ExtraDatasetType.BUU, ExtraDatasetType.AASCE, ExtraDatasetType.DD]
-    # extra_dataset_types1 = [ExtraDatasetType.CROPPED]
-    '''for extra_dataset_type1 in extra_dataset_types1:
+    # extra_dataset_types1 = [ExtraDatasetType.BUU, ExtraDatasetType.AASCE, ExtraDatasetType.DD]
+    extra_dataset_types1 = [ExtraDatasetType.CROPPED]
+    for extra_dataset_type1 in extra_dataset_types1:
         print("Processing", extra_dataset_type1.value + "...")
-        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)'''
+        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
     addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "extended_"
-    # dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
+    dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
     addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Extended"
-    print(addon2, "training set:")
+    print(addon2, "dataset:")
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
 
