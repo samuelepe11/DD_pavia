@@ -536,7 +536,7 @@ class XrayDataset(Dataset):
         dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored files
-        if correct_mistakes:
+        if correct_mistakes and not "cropped" in dataset_name:
             for i in range(dataset.len):
                 instance = dataset.dicom_instances[i]
                 instance_list = list(instance)
@@ -546,7 +546,7 @@ class XrayDataset(Dataset):
                     dataset.dicom_instances[i] = "".join(instance_list[:3] + [instance_list[4]])
 
         # Correct mistakes in the original data files
-        if correct_mistakes:
+        if correct_mistakes and not "cropped" in dataset_name:
             for datum in dataset.patient_data:
                 if datum.fracture_position is not None:
                     frac_pos = []

@@ -15,6 +15,6 @@ class AttentionViT(ConvAttentionNetwork):
     conv_proj = feature_extractor_model.conv_proj
     encoder = feature_extractor_model.encoder
 
-    def __init__(self, params=None, device="cpu"):
+    def __init__(self, params=None, device="cpu", weight_loss=False):
         super(AttentionViT, self).__init__(feature_extractor_model=(self.conv_proj, self.encoder), params=params,
-                                           device=device)
+                                           device=device, weight_loss=weight_loss)

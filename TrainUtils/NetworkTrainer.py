@@ -8,6 +8,7 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 import optuna
+from sqlalchemy.testing import is_not_
 from torch.utils.data import DataLoader
 from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
@@ -35,7 +36,8 @@ class NetworkTrainer:
 
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
-                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False):
+                 use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False,
+                 is_cropped=False, weight_loss=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -56,13 +58,13 @@ class NetworkTrainer:
         self.net_type = net_type if net_type is not None else self.default_net_type
         self.net_params = net_params if net_params is not None else self.default_net_params
         if self.net_type == NetType.BASE_RES_NEXT50:
-            self.net = BaseResNeXt50(params=self.net_params, device=self.device)
+            self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.BASE_RES_NEXT101:
-            self.net = BaseResNeXt101(params=self.net_params, device=self.device)
+            self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.BASE_VIT:
-            self.net = BaseViT(params=self.net_params, device=self.device)
+            self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.ATTENTION_VIT:
-            self.net = AttentionViT(params=self.net_params, device=self.device)
+            self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -71,7 +73,7 @@ class NetworkTrainer:
         self.classes = XrayDataset.classes
         self.epochs = epochs
         self.val_epochs = val_epochs
-        self.criterion = nn.BCELoss()
+
         param_groups = [{"params": [param for name, param in self.net.named_parameters() if "resnet.7" in name],
                          "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
                         {"params":  [param for name, param in self.net.named_parameters() if "resnet.7" not in name],
@@ -110,6 +112,18 @@ class NetworkTrainer:
 
             # Initialize preprocessors
             self.preprocessor = Preprocessor(dataset=train_data, only_apply=True, s3=s3)
+
+        self.is_cropped = is_cropped
+
+        self.weights_loss = weight_loss
+        if not weight_loss:
+            self.criterion = nn.BCELoss()
+        else:
+            num_pos = 0
+            for item, _ in self.train_loader:
+                num_pos += np.sum([label != "" for label in item[2]])
+            w_pos = self.train_data.len / (2 * num_pos)
+            self.criterion = nn.BCEWithLogitsLoss(weight=torch.tensor([w_pos]))
 
     def load_data(self, data, shuffle=False):
         if self.use_cuda:
@@ -291,11 +305,12 @@ class NetworkTrainer:
 
         return dataset, loader, dim
 
-    def compute_stats(self, y_true, y_pred, loss, acc, y_prob=None):
+    def compute_stats(self, y_true, y_pred, loss, acc, y_prob=None, y_output=None):
         n_vals = len(y_true)
         if loss is None:
             if y_prob is not None:
-                loss = self.criterion(y_prob, y_true)
+                tmp = y_prob if not self.weights_loss else y_output
+                loss = self.criterion(tmp, y_true)
                 loss = loss.item()
             else:
                 loss = None
@@ -335,6 +350,7 @@ class NetworkTrainer:
         y_prob = []
         y_true = []
         y_pred = []
+        y_output = []
         loss = 0
         with torch.no_grad():
             for batch in loader:
@@ -342,22 +358,29 @@ class NetworkTrainer:
                 loss += temp_loss.item()
 
                 # Accuracy evaluation
+                if self.weights_loss:
+                    y_output.append(output.cpu())
+
                 if output.shape[-1] == 1:
                     output = torch.cat((1 - output, output), dim=-1)
                 prediction = torch.argmax(output, dim=1)
 
-                y_prob.append(output.cpu())
+                if not self.weights_loss:
+                    y_prob.append(output.cpu())
+                else:
+                    y_prob.append(torch.sigmoid(output).cpu())
                 y_true.append(y.cpu())
                 y_pred.append(prediction.cpu())
 
             y_prob = torch.cat(y_prob, dim=0)
             y_true = torch.cat(y_true).squeeze(1).to(int)
             y_pred = torch.cat(y_pred).to(int)
+            y_output = torch.cat(y_output, dim=0) if len(y_output) > 0 else None
 
             loss /= len(loader)
             acc = torch.sum(y_true == y_pred) / len(y_true)
             acc = acc.item()
-        stats_holder = self.compute_stats(y_true, y_pred, loss, acc)
+        stats_holder = self.compute_stats(y_true, y_pred, loss, acc, y_output=y_output)
 
         # Compute multiclass confusion matrix
         cm_name = set_type.value + "_cm"
@@ -424,14 +447,15 @@ class NetworkTrainer:
         filepath = self.results_dir + addon + ".pt"
         if self.s3 is not None:
             filepath = self.s3.open(filepath, "wb")
-        train_parameters = None if not hasattr(self, "train_parameters") else self.train_parameters
-        optimizer_pretrain = None if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
+        net_params = self.net_params if not hasattr(self, "train_parameters") else self.train_parameters
+        optimizer = self.optimizer if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
+        weight_loss = False if hasattr(self, "weight_loss") else self.weights_loss
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
-                    "preprocess_inputs": self.preprocess_inputs, "net_params": self.net_params,
+                    "preprocess_inputs": self.preprocess_inputs, "net_params": net_params,
                     "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
                     "val_losses": self.val_losses, "val_eval_epochs": self.val_eval_epochs,
-                    "train_parameters": train_parameters, "enhance_images": self.enhance_images,
-                    "optimizer_pretrain_state_dict": optimizer_pretrain.state_dict()}, filepath)
+                    "enhance_images": self.enhance_images,
+                    "optimizer_pretrain_state_dict": optimizer.state_dict(), "weight_loss": weight_loss}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -529,9 +553,12 @@ class NetworkTrainer:
             except IndexError:
                 projection_id = None
 
-            projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
-                                                            set_type=set_type, preprocess=self.preprocess_inputs,
-                                                            projection_id=projection_id)
+            if not self.is_cropped:
+                projections = self.preprocessor.mask_projection(projection_list, (extra[0][i], extra[1][i]),
+                                                                set_type=set_type, preprocess=self.preprocess_inputs,
+                                                                projection_id=projection_id)
+            else:
+                projections = projection_list
 
             if self.enhance_images:
                 temp = []
@@ -665,7 +692,7 @@ class NetworkTrainer:
         return cm
 
     @staticmethod
-    def draw_multiclass_confusion_matrix(cm, labels, imgpath, s3=None):
+    def draw_multiclass_confusion_matrix(cm, labels, imgpath):
         plt.figure(figsize=(2, 2))
         try:
             cm = cm.cpu()
@@ -687,7 +714,7 @@ class NetworkTrainer:
 
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
-                   projection_dataset=False, s3=None, batch_size=None):
+                   projection_dataset=False, s3=None, batch_size=None, is_cropped=False):
         file_name = model_name if trial_n is None else "trial_" + str(trial_n)
         print("Loading " + file_name + "...")
         filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
@@ -698,12 +725,14 @@ class NetworkTrainer:
 
         if "enhance_images" not in checkpoint.keys():
             checkpoint.update({"enhance_images": False})
+        weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
-                                         projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"])
+                                         projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
+                                         is_cropped=is_cropped, weight_loss=weight_loss)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         if batch_size is not None:
@@ -765,10 +794,10 @@ if __name__ == "__main__":
     # Define variables
     working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "prova"
-    net_type1 = NetType.BASE_VIT
-    epochs1 = 500
-    preprocess_inputs1 = True
+    model_name1 = "cropped_projection_resnext50"
+    net_type1 = NetType.BASE_RES_NEXT50
+    epochs1 = 1
+    preprocess_inputs1 = False
     trial_n1 = None
     val_epochs1 = 10
     use_cuda1 = True
@@ -777,29 +806,32 @@ if __name__ == "__main__":
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
-    enhance_images1 = True
-    full_size1 = True
+    enhance_images1 = False
+    full_size1 = False
+    is_cropped1 = True
+    weight_loss1 = True
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    addon = "" if not is_cropped1 else "cropped_"
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
-    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
+    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.00001, "lr_second_last_factor": 10, "batch_size": 64, "p_dropout": 0,
+                   "lr_last": 0.001, "lr_second_last_factor": 10, "batch_size": 64, "p_dropout": 0.5,
                    "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
                               use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
-                              full_size=full_size1)
+                              full_size=full_size1, is_cropped=is_cropped1, weight_loss=weight_loss1)
 
     # Train model
     trainer1.train(show_epochs=True)
@@ -810,6 +842,7 @@ if __name__ == "__main__":
     print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
-                                         test_data=test_data1, projection_dataset=projection_dataset1)
+                                         test_data=test_data1, projection_dataset=projection_dataset1,
+                                         is_cropped=is_cropped1)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
                                    assess_calibration=assess_calibration1)

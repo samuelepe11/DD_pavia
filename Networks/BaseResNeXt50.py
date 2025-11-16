@@ -11,6 +11,6 @@ class BaseResNeXt50(ConvBaseNetwork):
     # Define attributes
     feature_extractor_model = models.resnext50_32x4d(weights=ResNeXt50_32X4D_Weights.DEFAULT, progress=False)
 
-    def __init__(self, params=None, device="cpu"):
+    def __init__(self, params=None, device="cpu", weight_loss=False):
         super(BaseResNeXt50, self).__init__(feature_extractor_model=self.feature_extractor_model, params=params,
-                                            device=device)
+                                            device=device, weight_loss=weight_loss)

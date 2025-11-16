@@ -32,10 +32,11 @@ class ConvBaseNetwork(nn.Module):
     n_removable_layers = 2
     freezable_layers = ["bn1", "conv1", "layer1", "layer2", "layer3"]
 
-    def __init__(self, feature_extractor_model, params, device="cpu"):
+    def __init__(self, feature_extractor_model, params, device="cpu", weight_loss=False):
         super(ConvBaseNetwork, self).__init__()
         self.device = device
         self.params = params
+        self.weight_loss = weight_loss
 
         # Define modules
         self.kernel_size = params["kernel_size"]
@@ -79,7 +80,9 @@ class ConvBaseNetwork(nn.Module):
             fc_list.append(nn.Linear(self.fc_sizes[i], self.fc_sizes[i + 1]))
             fc_list.append(nn.ReLU())
         fc_list.append(nn.Linear(self.fc_sizes[-1], 1))
-        fc_list.append(nn.Sigmoid())
+
+        if not self.weight_loss:
+            fc_list.append(nn.Sigmoid())
         self.fc = nn.Sequential(*fc_list)
 
     def forward(self, x, segment_ids, view_ids, avoid_sigmoid=False, n_parallel_gpu=0):

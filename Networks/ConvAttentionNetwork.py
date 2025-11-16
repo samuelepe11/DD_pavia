@@ -17,9 +17,9 @@ class ConvAttentionNetwork(ConvBaseNetwork):
     freezable_layers = []
     n_removable_layers = None
 
-    def __init__(self, feature_extractor_model, params=None, device="cpu"):
+    def __init__(self, feature_extractor_model, params=None, device="cpu", weight_loss=False):
         super(ConvAttentionNetwork, self).__init__(feature_extractor_model=feature_extractor_model, params=params,
-                                                   device=device)
+                                                   device=device, weight_loss=weight_loss)
 
     def initialize_modules(self, feature_extractor_model, params):
         # Define pre-trained network

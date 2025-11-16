@@ -23,7 +23,7 @@ class OptunaParamFinder:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
                  search_for_untracked_models=False, preprocess_inputs=True, enhance_images=True, full_size=True, direction="maximize",
-                 is_pretrain=False):
+                 is_pretrain=False, is_cropped=False, weight_loss=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -38,6 +38,7 @@ class OptunaParamFinder:
         self.preprocess_inputs = preprocess_inputs
         self.enhance_images = enhance_images
         self.full_size = full_size
+        self.weight_loss = weight_loss
 
         self.output_metric = output_metric
         self.double_output = double_output
@@ -68,6 +69,8 @@ class OptunaParamFinder:
         self.search_for_untracked_models = search_for_untracked_models
         self.is_pretrain = is_pretrain
         self.retrieve_previous_results()
+
+        self.is_cropped = is_cropped
 
     def retrieve_previous_results(self):
         addon = "" if not self.is_pretrain else "pretrain_"
@@ -114,7 +117,8 @@ class OptunaParamFinder:
                                                             trial_n=self.counter, use_cuda=self.use_cuda,
                                                             train_data=self.train_data, val_data=self.val_data,
                                                             test_data=self.test_data, s3=self.s3,
-                                                            projection_dataset=self.projection_dataset)
+                                                            projection_dataset=self.projection_dataset,
+                                                            is_cropped=self.is_cropped)
                         train_stats, val_stats = trainer.summarize_performance(show_test=False, show_process=False,
                                                                                show_cm=False, trial_n=self.counter)
                         val_output = getattr(val_stats, self.output_metric)
@@ -149,17 +153,17 @@ class OptunaParamFinder:
 
         # Sample parameters
         params = {
-            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 9, 11, step=1))),
-            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 9, 11, step=1))),
-            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 2, 3, step=1)),
-            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 2, 3, step=1)),
-            "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 2, 4, step=1)),
-            "optimizer": trial.suggest_categorical("optimizer", ["SGD", "RMSprop", "Adam"]),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 7, 9, step=1))),
+            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 7, 9, step=1))),
+            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 2, step=1)),
+            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 1, 2, step=1)),
+            "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 2, step=1)),
+            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
             "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=6),
-            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 1001, step=100),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 2, 3, step=1))),
-            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 5, 9, step=2), decimals=1),
+            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 51, step=10),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1))),
+            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 3, 7, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
 
@@ -177,7 +181,8 @@ class OptunaParamFinder:
                                      net_params=params, use_cuda=self.use_cuda, s3=self.s3,
                                      n_parallel_gpu=self.n_parallel_gpu, projection_dataset=self.projection_dataset,
                                      preprocess_inputs=self.preprocess_inputs,
-                                     enhance_images=self.enhance_images, full_size=self.full_size)
+                                     enhance_images=self.enhance_images, full_size=self.full_size,
+                                     is_cropped=self.is_cropped, weight_loss=self.weight_loss)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                        output_metric=self.output_metric, double_output=self.double_output)
             print("Value:", val_metric)
@@ -329,38 +334,42 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "projection_vit_optuna_full_size"
+    model_name1 = "cropped_projection_resnext50_optuna"
     selected_segments1 = None
     selected_projection1 = None
-    net_type1 = NetType.BASE_VIT
-    epochs1 = 500
+    net_type1 = NetType.BASE_RES_NEXT50
+    epochs1 = 100
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
-    enhance_images1 = True
-    full_size1 = True
+    enhance_images1 = False
+    full_size1 = False
+    is_cropped1 = True
 
     # Load data
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_training",
+    addon = "" if not is_cropped1 else "cropped_"
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
-    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_validation",
+    val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 5
+    n_trials1 = 25
     output_metric1 = "mcc"
     double_output1 = True
     search_for_untracked_models1 = False
+    weight_loss1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                 projection_dataset=projection_dataset1, output_metric=output_metric1,
                                 double_output=double_output1, search_for_untracked_models=search_for_untracked_models1,
-                                enhance_images=enhance_images1, full_size=full_size1)
+                                enhance_images=enhance_images1, full_size=full_size1, is_cropped=is_cropped1,
+                                weight_loss=weight_loss1)
     # Run search
     optuna1.initialize_study()
 
