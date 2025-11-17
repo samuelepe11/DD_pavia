@@ -435,11 +435,11 @@ if __name__ == "__main__":
                              enhance_images=enhance_images1, train_parameters=train_parameters1)
 
     # Apply on an example image
-    url1 = "https://user-images.githubusercontent.com/11435359/147738734-196fd92f-9260-48d5-ba7e-bf103d29364d.jpg"
+    '''url1 = "https://user-images.githubusercontent.com/11435359/147738734-196fd92f-9260-48d5-ba7e-bf103d29364d.jpg"
     image1 = Image.open(requests.get(url1, stream=True).raw)
     image1 = transforms.ToTensor()(image1)
     image_batch1 = image1.unsqueeze(0)
-    # trainer1.visualise_reconstruction(image_batch1, do_normalise_input=False, title="ImageNet example", store_img=True)
+    trainer1.visualise_reconstruction(image_batch1, do_normalise_input=False, title="ImageNet example", store_img=True)'''
 
     # Apply on an X-ray image
     indices1 = list(range(3))
@@ -459,10 +459,10 @@ if __name__ == "__main__":
         proj_list1.append(proj1)
     proj_batch1 = torch.stack(proj_list1, 0)
 
-    NetworkTrainer.set_seed(111099)
+    '''NetworkTrainer.set_seed(111099)
     trainer1.summarize_performance_pretrain(show_test=show_test1, show_process=True)
     NetworkTrainer.set_seed(111099)
-    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=store_img1)
+    trainer1.visualise_reconstruction(proj_batch1, do_normalise_input=False, title="Before training", store_img=store_img1)'''
 
     # Pretrain model
     new_pretraining1 = False

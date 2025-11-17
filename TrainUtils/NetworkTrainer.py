@@ -26,6 +26,7 @@ from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
 from Networks.BaseViT import BaseViT
 from Networks.AttentionViT import AttentionViT
+from Networks.MLPLocator import MLPLocator
 from TrainUtils.StatsHolder import StatsHolder
 
 
@@ -65,6 +66,8 @@ class NetworkTrainer:
             self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.ATTENTION_VIT:
             self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
+        elif self.net_type == NetType.LOCATOR_DEFAULT:
+            self.net = MLPLocator(params=self.net_params, device=self.device)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -73,11 +76,13 @@ class NetworkTrainer:
         self.classes = XrayDataset.classes
         self.epochs = epochs
         self.val_epochs = val_epochs
-
-        param_groups = [{"params": [param for name, param in self.net.named_parameters() if "resnet.7" in name],
-                         "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
-                        {"params":  [param for name, param in self.net.named_parameters() if "resnet.7" not in name],
-                         "lr": self.net_params["lr_last"]}]
+        try:
+            param_groups = [{"params": [param for name, param in self.net.named_parameters() if "resnet.7" in name],
+                             "lr": self.net_params["lr_last"] / self.net_params["lr_second_last_factor"]},
+                            {"params":  [param for name, param in self.net.named_parameters() if "resnet.7" not in name],
+                             "lr": self.net_params["lr_last"]}]
+        except KeyError:
+            param_groups = [{"params": self.net.parameters(), "lr": self.net_params["lr"]}]
         self.optimizer = getattr(torch.optim, self.net_params["optimizer"])(param_groups)
         self.convergence_thresh = convergence_thresh
         self.convergence_patience = convergence_patience
@@ -122,7 +127,7 @@ class NetworkTrainer:
             num_pos = 0
             for item, _ in self.train_loader:
                 num_pos += np.sum([label != "" for label in item[2]])
-            w_pos = self.train_data.len / (2 * num_pos)
+            w_pos = self.train_data.len / num_pos - 1
             self.criterion = nn.BCEWithLogitsLoss(weight=torch.tensor([w_pos]))
 
     def load_data(self, data, shuffle=False):
@@ -172,7 +177,6 @@ class NetworkTrainer:
                 self.optimizer.zero_grad()
                 loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
                 train_loss += loss.item()
-
                 train_acc += acc.item()
 
                 loss.backward()
@@ -269,7 +273,8 @@ class NetworkTrainer:
         loss = self.criterion(output, y)
 
         # Accuracy evaluation
-        pred = (output > 0.5).to(torch.int)
+        probs = output if not self.weights_loss else torch.sigmoid(output)
+        pred = (probs > 0.5).to(torch.int)
         acc = torch.sum(pred == y) / y.shape[0]
 
         return loss, output, y, acc
@@ -362,13 +367,12 @@ class NetworkTrainer:
                     y_output.append(output.cpu())
 
                 if output.shape[-1] == 1:
+                    if self.weights_loss:
+                        output = torch.sigmoid(output)
                     output = torch.cat((1 - output, output), dim=-1)
                 prediction = torch.argmax(output, dim=1)
 
-                if not self.weights_loss:
-                    y_prob.append(output.cpu())
-                else:
-                    y_prob.append(torch.sigmoid(output).cpu())
+                y_prob.append(output.cpu())
                 y_true.append(y.cpu())
                 y_pred.append(prediction.cpu())
 
@@ -793,7 +797,7 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    #working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "cropped_projection_resnext50"
     net_type1 = NetType.BASE_RES_NEXT50
     epochs1 = 1
@@ -813,12 +817,12 @@ if __name__ == "__main__":
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 
