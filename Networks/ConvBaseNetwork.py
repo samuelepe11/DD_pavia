@@ -25,8 +25,11 @@ class ConvBaseNetwork(nn.Module):
             ]),
         ], p=0.3),
         transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     inference_data_transforms = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     n_removable_layers = 2
@@ -104,7 +107,9 @@ class ConvBaseNetwork(nn.Module):
 
         if self.training:
             x = [self.training_data_transforms(img) for img in x]
-        x = torch.stack([self.inference_data_transforms(img) for img in x])
+        else:
+            x = [self.inference_data_transforms(img) for img in x]
+        x = torch.stack(x)
         x = x.to(self.device)
         x = self.feature_extractor(x)
         if not x.is_contiguous():

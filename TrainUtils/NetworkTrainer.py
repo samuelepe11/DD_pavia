@@ -796,11 +796,11 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
-    #working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50"
-    net_type1 = NetType.BASE_RES_NEXT50
-    epochs1 = 1
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_resnext101"
+    net_type1 = NetType.BASE_RES_NEXT101
+    epochs1 = 200
     preprocess_inputs1 = False
     trial_n1 = None
     val_epochs1 = 10
