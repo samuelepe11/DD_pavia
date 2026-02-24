@@ -23,7 +23,7 @@ class OptunaParamFinder:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
                  search_for_untracked_models=False, preprocess_inputs=True, enhance_images=True, full_size=True, direction="maximize",
-                 is_pretrain=False, is_cropped=False, weight_loss=False):
+                 is_pretrain=False, is_cropped=False, weight_loss=False, dynamic_under_sampling=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -39,6 +39,7 @@ class OptunaParamFinder:
         self.enhance_images = enhance_images
         self.full_size = full_size
         self.weight_loss = weight_loss
+        self.dynamic_under_sampling = dynamic_under_sampling
 
         self.output_metric = output_metric
         self.double_output = double_output
@@ -184,7 +185,8 @@ class OptunaParamFinder:
                                      enhance_images=self.enhance_images, full_size=self.full_size,
                                      is_cropped=self.is_cropped, weight_loss=self.weight_loss)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
-                                       output_metric=self.output_metric, double_output=self.double_output)
+                                       output_metric=self.output_metric, double_output=self.double_output,
+                                       dynamic_under_sampling=self.dynamic_under_sampling)
             print("Value:", val_metric)
             if self.double_output:
                 val_metric, train_metric = val_metric
@@ -334,7 +336,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_moreaugment_optuna"
+    model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
@@ -363,13 +365,14 @@ if __name__ == "__main__":
     double_output1 = False
     search_for_untracked_models1 = False
     weight_loss1 = True
+    dynamic_under_sampling1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
                                 projection_dataset=projection_dataset1, output_metric=output_metric1,
                                 double_output=double_output1, search_for_untracked_models=search_for_untracked_models1,
                                 enhance_images=enhance_images1, full_size=full_size1, is_cropped=is_cropped1,
-                                weight_loss=weight_loss1)
+                                weight_loss=weight_loss1, dynamic_under_sampling=dynamic_under_sampling1)
     # Run search
     optuna1.initialize_study()
 

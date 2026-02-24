@@ -9,7 +9,7 @@ import time
 import matplotlib.pyplot as plt
 import optuna
 from sqlalchemy.testing import is_not_
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
@@ -39,7 +39,7 @@ class NetworkTrainer:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False,
-                 is_cropped=False, weight_loss=False):
+                 is_cropped=False, weight_loss=False, dynamic_under_sampling=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -123,8 +123,9 @@ class NetworkTrainer:
 
         self.is_cropped = is_cropped
 
+        self.dynamic_under_sampling = dynamic_under_sampling
         self.weights_loss = weight_loss
-        if not weight_loss:
+        if not weight_loss or dynamic_under_sampling:
             self.criterion = nn.BCELoss()
         else:
             num_pos = 0
@@ -164,19 +165,29 @@ class NetworkTrainer:
     
         if len(self.train_losses) == 0 and trial is None:
             print("\nPerforming initial evaluation...")
-            _, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
+            #_, val_stats = self.summarize_performance(show_test=False, show_process=False, show_cm=False)
 
         if show_epochs:
             print("\nStarting the training phase...")
+
+        if self.dynamic_under_sampling:
+            labels = []
+            for item, _ in self.train_loader:
+                labels += [int(label != "") for label in item[2]]
+            labels = np.array(labels)
+            pos_idx = np.where(labels == 1)[0]
+            neg_idx = np.where(labels == 0)[0]
+
         for epoch in range(self.epochs):
             if not self.n_parallel_gpu:
                 net.set_training(True)
             else:
                 net.train()
-                
+
+            loader = self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(pos_idx, neg_idx)
             train_loss = 0
             train_acc = 0
-            for batch in self.train_loader:
+            for batch in loader:
                 self.optimizer.zero_grad()
                 loss, _, _, acc = self.apply_network(net, batch, set_type=SetType.TRAIN)
                 train_loss += loss.item()
@@ -591,6 +602,14 @@ class NetworkTrainer:
         input = torch.from_numpy(input)
         return input
 
+    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=2):
+        sampled_neg_idx = np.random.choice(neg_idx, size=neg_proportion*len(pos_idx), replace=False)
+        epoch_indices = np.concatenate([pos_idx, sampled_neg_idx])
+        np.random.shuffle(epoch_indices)
+        epoch_subset = Subset(self.train_data, epoch_indices)
+        loader, _ = self.load_data(epoch_subset, shuffle=True)
+        return loader
+
     @staticmethod
     def custom_collate_fn(batch, img_dim=None):
         segment_datas = []
@@ -804,9 +823,9 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    # working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext101_noweightloss"
+    working_dir1 = "./../../"
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_resnext101_dynundersamp"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
     preprocess_inputs1 = False
@@ -822,15 +841,16 @@ if __name__ == "__main__":
     full_size1 = False
     is_cropped1 = True
     weight_loss1 = False
+    dynamic_under_sampling1 = True
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 
@@ -843,7 +863,8 @@ if __name__ == "__main__":
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
                               use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
-                              full_size=full_size1, is_cropped=is_cropped1, weight_loss=weight_loss1)
+                              full_size=full_size1, is_cropped=is_cropped1, weight_loss=weight_loss1,
+                              dynamic_under_sampling=dynamic_under_sampling1)
 
     # Train model
     trainer1.train(show_epochs=True)
