@@ -334,10 +334,10 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext101_optuna"
+    model_name1 = "cropped_projection_resnext50_moreaugment_optuna"
     selected_segments1 = None
     selected_projection1 = None
-    net_type1 = NetType.BASE_RES_NEXT101
+    net_type1 = NetType.BASE_RES_NEXT50
     epochs1 = 200
     val_epochs1 = 10
     use_cuda1 = True
@@ -360,7 +360,7 @@ if __name__ == "__main__":
     # Define Optuna model
     n_trials1 = 50
     output_metric1 = "mcc"
-    double_output1 = True
+    double_output1 = False
     search_for_untracked_models1 = False
     weight_loss1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,

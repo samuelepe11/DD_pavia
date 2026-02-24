@@ -22,6 +22,7 @@ from DataUtils.Preprocessor import Preprocessor
 from Enumerators.NetType import NetType
 from Enumerators.SetType import SetType
 from Enumerators.ProjectionType import ProjectionType
+from Networks.BaseResNet18 import BaseResNet18
 from Networks.BaseResNeXt50 import BaseResNeXt50
 from Networks.BaseResNeXt101 import BaseResNeXt101
 from Networks.BaseViT import BaseViT
@@ -60,6 +61,8 @@ class NetworkTrainer:
         self.net_params = net_params if net_params is not None else self.default_net_params
         if self.net_type == NetType.BASE_RES_NEXT50:
             self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss)
+        elif self.net_type == NetType.BASE_RES_NET18:
+            self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.BASE_RES_NEXT101:
             self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss)
         elif self.net_type == NetType.BASE_VIT:
@@ -128,7 +131,7 @@ class NetworkTrainer:
             for item, _ in self.train_loader:
                 num_pos += np.sum([label != "" for label in item[2]])
             w_pos = self.train_data.len / num_pos - 1
-            self.criterion = nn.BCEWithLogitsLoss(weight=torch.tensor([w_pos]))
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([w_pos]))
 
     def load_data(self, data, shuffle=False):
         if self.use_cuda:
@@ -336,7 +339,7 @@ class NetworkTrainer:
         stats = StatsHolder(loss, acc, tp, tn, fp, fn, auc)
         return stats
 
-    def test(self, set_type=SetType.TRAIN, show_cm=False, assess_calibration=False):
+    def test(self, set_type=SetType.TRAIN, show_cm=False, assess_calibration=False, threshold=0.5):
         net = self.net
         if not self.n_parallel_gpu:
             net.set_cuda(cuda=self.use_cuda)
@@ -369,8 +372,10 @@ class NetworkTrainer:
                 if output.shape[-1] == 1:
                     if self.weights_loss:
                         output = torch.sigmoid(output)
+                    prediction = (output > threshold)[:, 0].to(torch.int)
                     output = torch.cat((1 - output, output), dim=-1)
-                prediction = torch.argmax(output, dim=1)
+                else:
+                    prediction = torch.argmax(output, dim=1)
 
                 y_prob.append(output.cpu())
                 y_true.append(y.cpu())
@@ -466,9 +471,10 @@ class NetworkTrainer:
         print()
 
     def summarize_performance(self, show_test=False, show_process=False, show_cm=False, trial_n=None,
-                              assess_calibration=False):
+                              assess_calibration=False, threshold=0.5):
         # Show final losses
-        train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration)
+        train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration,
+                                threshold=threshold)
         print("Training loss = " + str(np.round(train_stats.loss, 5)) + " - Training accuracy = " +
               str(np.round(train_stats.acc * 100, 7)) + "% - Training F1-score = " +
               str(np.round(train_stats.f1 * 100, 7)) + "%")
@@ -478,7 +484,8 @@ class NetworkTrainer:
             NetworkTrainer.show_calibration_table(train_stats, "training")
 
         print()
-        val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration)
+        val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration,
+                              threshold=threshold)
         print("Validation loss = " + str(np.round(val_stats.loss, 5)) + " - Validation accuracy = " +
               str(np.round(val_stats.acc * 100, 7)) + "% - Validation F1-score = " +
               str(np.round(val_stats.f1 * 100, 7)))
@@ -489,7 +496,8 @@ class NetworkTrainer:
 
         if show_test:
             print()
-            test_stats = self.test(set_type=SetType.TEST, show_cm=show_cm, assess_calibration=assess_calibration)
+            test_stats = self.test(set_type=SetType.TEST, show_cm=show_cm, assess_calibration=assess_calibration,
+                                   threshold=threshold)
             print("Test loss = " + str(np.round(test_stats.loss, 5)) + " - Test accuracy = " +
                   str(np.round(test_stats.acc * 100, 7)) + "% - Test F1-score = " +
                   str(np.round(test_stats.f1 * 100, 7)))
@@ -798,7 +806,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext101"
+    model_name1 = "cropped_projection_resnext101_noweightloss"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
     preprocess_inputs1 = False
@@ -813,16 +821,16 @@ if __name__ == "__main__":
     enhance_images1 = False
     full_size1 = False
     is_cropped1 = True
-    weight_loss1 = True
+    weight_loss1 = False
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 

@@ -709,7 +709,7 @@ if __name__ == "__main__":
         print("Processing", extra_dataset_type1.value + "...")
         dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
     addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "extended_"
-    dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
+    # dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
     addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Extended"
