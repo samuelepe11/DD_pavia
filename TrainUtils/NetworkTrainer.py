@@ -60,15 +60,15 @@ class NetworkTrainer:
         self.net_type = net_type if net_type is not None else self.default_net_type
         self.net_params = net_params if net_params is not None else self.default_net_params
         if self.net_type == NetType.BASE_RES_NEXT50:
-            self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss)
+            self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.BASE_RES_NET18:
-            self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss)
+            self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.BASE_RES_NEXT101:
-            self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss)
+            self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.BASE_VIT:
-            self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
+            self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.ATTENTION_VIT:
-            self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss)
+            self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.LOCATOR_DEFAULT:
             self.net = MLPLocator(params=self.net_params, device=self.device)
         else:
@@ -287,7 +287,7 @@ class NetworkTrainer:
         loss = self.criterion(output, y)
 
         # Accuracy evaluation
-        probs = output if not self.weights_loss else torch.sigmoid(output)
+        probs = output if (not self.weights_loss or self.dynamic_under_sampling) else torch.sigmoid(output)
         pred = (probs > 0.5).to(torch.int)
         acc = torch.sum(pred == y) / y.shape[0]
 
@@ -328,7 +328,7 @@ class NetworkTrainer:
         n_vals = len(y_true)
         if loss is None:
             if y_prob is not None:
-                tmp = y_prob if not self.weights_loss else y_output
+                tmp = y_prob if (not self.weights_loss or self.dynamic_under_sampling) else y_output
                 loss = self.criterion(tmp, y_true)
                 loss = loss.item()
             else:
@@ -377,11 +377,11 @@ class NetworkTrainer:
                 loss += temp_loss.item()
 
                 # Accuracy evaluation
-                if self.weights_loss:
+                if self.weights_loss and not self.dynamic_under_sampling:
                     y_output.append(output.cpu())
 
                 if output.shape[-1] == 1:
-                    if self.weights_loss:
+                    if self.weights_loss and not self.dynamic_under_sampling:
                         output = torch.sigmoid(output)
                     prediction = (output > threshold)[:, 0].to(torch.int)
                     output = torch.cat((1 - output, output), dim=-1)
@@ -470,12 +470,14 @@ class NetworkTrainer:
         net_params = self.net_params if not hasattr(self, "train_parameters") else self.train_parameters
         optimizer = self.optimizer if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
         weight_loss = False if hasattr(self, "weight_loss") else self.weights_loss
+        dynamic_under_sampling = False if hasattr(self, "dynamic_under_sampling") else self.dynamic_under_sampling
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": net_params,
                     "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
                     "val_losses": self.val_losses, "val_eval_epochs": self.val_eval_epochs,
                     "enhance_images": self.enhance_images,
-                    "optimizer_pretrain_state_dict": optimizer.state_dict(), "weight_loss": weight_loss}, filepath)
+                    "optimizer_pretrain_state_dict": optimizer.state_dict(), "weight_loss": weight_loss,
+                    "dynamic_under_sampling": dynamic_under_sampling}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -757,13 +759,14 @@ class NetworkTrainer:
         if "enhance_images" not in checkpoint.keys():
             checkpoint.update({"enhance_images": False})
         weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
+        dynamic_under_sampling = False if not "dynamic_under_sampling" in checkpoint.keys() else checkpoint["dynamic_under_sampling"]
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
                                          projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
-                                         is_cropped=is_cropped, weight_loss=weight_loss)
+                                         is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         if batch_size is not None:
@@ -823,13 +826,13 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext101_dynundersamp"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_resnext50_onlylat_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
     preprocess_inputs1 = False
-    trial_n1 = None
+    trial_n1 = 3
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
@@ -845,12 +848,12 @@ if __name__ == "__main__":
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
 
@@ -867,9 +870,9 @@ if __name__ == "__main__":
                               dynamic_under_sampling=dynamic_under_sampling1)
 
     # Train model
-    trainer1.train(show_epochs=True)
-    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
+    # trainer1.train(show_epochs=True)
+    # trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+    #                                assess_calibration=assess_calibration1)'''
     
     # Evaluate model
     print()
@@ -877,5 +880,6 @@ if __name__ == "__main__":
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1,
                                          is_cropped=is_cropped1)
-    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
+    # trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+    #                                assess_calibration=assess_calibration1)
+

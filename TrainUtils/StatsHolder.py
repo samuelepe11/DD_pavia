@@ -7,8 +7,8 @@ class StatsHolder:
 
     # Define class attributes
     eps = 1e-7
-    table_stats = ["f1", "auc", "mcc"]
-    comparable_stats = {"acc": "Accuracy", "f1": "F1-score", "auc": "AUC", "mcc": "MCC"}
+    table_stats = ["f1", "auc", "mcc", "bal_acc"]
+    comparable_stats = {"acc": "Accuracy", "f1": "F1-score", "auc": "AUC", "mcc": "MCC", "bal_acc": "Balanced Accuracy"}
 
     def __init__(self, loss, acc, tp, tn, fp, fn, auc, extra_stats=None):
         # Initialize attributes
@@ -31,6 +31,7 @@ class StatsHolder:
             self.sens = np.round(tp / (tp + fn + self.eps) + self.eps, 5)
             self.spec = np.round(tn / (tn + fp + self.eps) + self.eps, 5)
             self.precis = np.round(tp / (tp + fp + self.eps) + self.eps, 5)
+            self.bal_acc = np.round(np.mean([self.sens, self.spec]), 5)
             self.neg_pred_val = np.round(tn / (tn + fn + self.eps) + self.eps, 5)
             self.f1 = np.round(2 * self.sens * self.precis / (self.sens + self.precis + self.eps) + self.eps, 5)
             self.mcc = np.round((tp * tn - fp * fn) / np.sqrt(np.float64(tp + fp) * (fn + tn) * (tp + fn) * (fp + tn) + self.eps) + self.eps, 5)

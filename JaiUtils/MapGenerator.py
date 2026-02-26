@@ -22,7 +22,7 @@ from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
 # Class
 class MapGenerator:
     def __init__(self, working_dir, model_name, trial_n, use_cuda=False, projection_dataset=False,
-                 selected_segments=None, selected_projection=None):
+                 selected_segments=None, selected_projection=None, is_cropped=False):
         # Initialize attributes
         self.working_dir = working_dir
         self.jai_dir = working_dir + XrayDataset.results_fold + XrayDataset.jai_fold
@@ -34,27 +34,31 @@ class MapGenerator:
         self.trial_n = trial_n
         self.use_cuda = use_cuda
         self.projection_dataset = projection_dataset
+        self.is_cropped = is_cropped
 
         # Load data
-        '''self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name="xray_dataset_training",
+        addon = "" if not is_cropped1 else "cropped_"
+        self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_training",
                                                    selected_segments=selected_segments,
-                                                   selected_projection=selected_projection)'''
-        self.val_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name="xray_dataset_validation",
+                                                   selected_projection=selected_projection)
+        self.val_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_validation",
                                                  selected_segments=selected_segments,
                                                  selected_projection=selected_projection)
-        '''self.test_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name="xray_dataset_test",
+        self.test_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_test",
                                                   selected_segments=selected_segments,
-                                                  selected_projection=selected_projection)'''
+                                                  selected_projection=selected_projection)
 
         # Load model
         self.trainer = NetworkTrainer.load_model(working_dir=working_dir, model_name=model_name, trial_n=trial_n,
-                                                 use_cuda=use_cuda, train_data=self.val_data, val_data=self.val_data,
-                                                 test_data=self.val_data, projection_dataset=projection_dataset)
+                                                 use_cuda=use_cuda, train_data=self.train_data, val_data=self.val_data,
+                                                 test_data=self.test_data, projection_dataset=projection_dataset,
+                                                 is_cropped=self.is_cropped)
+
         PretrainedFeatureExtractor.freeze_layers(self.trainer.net, [])
 
         # Assess model
-        '''self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
-        self.aggregate_evals()'''
+        self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
+        self.aggregate_evals()
 
         # Define CAM builder
         model = self.trainer.net.to("cuda")
@@ -138,7 +142,10 @@ class MapGenerator:
             instance_name = f"{extra[0]:03d}" + extra[1].lower()
             fold = self.trainer.preprocessor.segmentation_dir + set_type.value
             for j in range(len(item)):
-                projection_type_j, projection_j, frac_label = item[j]
+                try:
+                    projection_type_j, projection_j, frac_label = item[j]
+                except ValueError:
+                    projection_type_j, projection_j, frac_label = item[j]
                 projection_type.append(projection_type_j)
                 original_imgs.append(np.stack([projection_j / np.max(projection_j)] * 3, axis=-1))
                 resized_img.append(cv2.resize(projection_j, (img_dim, img_dim))[np.newaxis, :, :])
@@ -337,23 +344,24 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "projection_resnext101_optuna"
-    trial_n1 = 60
-    use_cuda1 = False
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
+    trial_n1 = 34
+    use_cuda1 = True
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
+    is_cropped1 = True
 
     # Define generator
     generator1 = MapGenerator(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1, use_cuda=use_cuda1,
                               projection_dataset=projection_dataset1, selected_segments=selected_segments1,
-                              selected_projection=selected_projection1)
+                              selected_projection=selected_projection1, is_cropped=is_cropped1)
 
     # Draw maps
     set_type1 = SetType.VAL
     target_classes1 = [1]
     explainer_types1 = ["Grad-CAM"]
-    target_layers1 = ["feature_extractor.features.0"]
+    target_layers1 = ["feature_extractor.features.7.2.conv3"]
     generator1.get_cam(set_type=set_type1, target_classes=target_classes1, explainer_types=explainer_types1,
                        target_layers=target_layers1)
