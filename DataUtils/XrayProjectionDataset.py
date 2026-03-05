@@ -18,7 +18,10 @@ class XrayProjectionDataset(XrayDataset):
 
     def __getitem__(self, ind):
         projection_name = self.dicom_projection_instances[ind]
-        segment_name, proj_ind = projection_name.split("_")
+        try:
+            segment_name, proj_ind = projection_name.split("_")
+        except ValueError:
+            print(projection_name)
         instance_ind = self.dicom_instances.index(segment_name)
         segment_data, extra = super().__getitem__(instance_ind)
         pt_id, segment_id = extra

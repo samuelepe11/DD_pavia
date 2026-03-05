@@ -128,7 +128,7 @@ class ConvBaseNetwork(nn.Module):
         gap_output = torch.mean(gap_output, dim=1)
 
         # Pass through final fully connected layer
-        if avoid_sigmoid:
+        if avoid_sigmoid and list(self.fc.children())[-1].__class__ == nn.Sigmoid:
             out = gap_output
             for layer in list(self.fc.children())[:-1]:
                 out = layer(out)
