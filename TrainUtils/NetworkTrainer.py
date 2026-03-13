@@ -828,11 +828,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_onlylat_optuna"
+    model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
     net_type1 = NetType.BASE_RES_NEXT101
     epochs1 = 200
     preprocess_inputs1 = False
-    trial_n1 = 3
+    trial_n1 = 34
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
@@ -843,7 +843,7 @@ if __name__ == "__main__":
     enhance_images1 = False
     full_size1 = False
     is_cropped1 = True
-    weight_loss1 = False
+    weight_loss1 = True
     dynamic_under_sampling1 = True
 
     # Load data
@@ -880,6 +880,6 @@ if __name__ == "__main__":
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1,
                                          is_cropped=is_cropped1)
-    # trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-    #                                assess_calibration=assess_calibration1)
+    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)
 

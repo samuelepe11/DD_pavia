@@ -7,8 +7,9 @@ class StatsHolder:
 
     # Define class attributes
     eps = 1e-7
-    table_stats = ["f1", "auc", "mcc", "bal_acc"]
-    comparable_stats = {"acc": "Accuracy", "f1": "F1-score", "auc": "AUC", "mcc": "MCC", "bal_acc": "Balanced Accuracy"}
+    table_stats = ["f1", "auc", "mcc", "bal_acc", "sens", "spec", "precis"]
+    comparable_stats = {"acc": "Accuracy", "f1": "F1-score", "auc": "AUC", "mcc": "MCC", "bal_acc": "Balanced Accuracy",
+                        "sens": "Sensitivity/Recall", "spec": "Specificity", "precis": "Precision"}
 
     def __init__(self, loss, acc, tp, tn, fp, fn, auc, extra_stats=None):
         # Initialize attributes

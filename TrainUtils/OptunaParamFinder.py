@@ -79,8 +79,12 @@ class OptunaParamFinder:
                                                                           self.s3.ls(self.results_dir)]
         if addon + "optuna_study_results.csv" in file_list:
             filepath = self.results_dir + addon + "distributions.json"
-            f = open(filepath, "r") if self.s3 is None else self.s3.open(filepath, "r")
-            distributions = json.load(f)
+            if self.s3 is None:
+                with open(filepath, "r") as f:
+                    distributions = json.load(f)
+            else:
+                with self.s3.open(filepath, "r") as f:
+                    distributions = json.load(f)
             distributions = {k: eval(v["name"])(**{key: value for key, value in v.items() if key != "name"})
                              for k, v in distributions.items()}
 
@@ -154,17 +158,17 @@ class OptunaParamFinder:
 
         # Sample parameters
         params = {
-            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 7, 9, step=1))),
-            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 7, 9, step=1))),
-            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 0, 1, step=1)),
-            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 0, 1, step=1)),
-            "kernel_size": int(trial.suggest_int("kernel_size", 3, 5, step=2)),
-            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 2, step=1)),
-            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam"]),
-            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 3, 5, step=1)), decimals=6),
-            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 51, step=10),
-            "batch_size": int(2 ** (trial.suggest_int("batch_size", 5, 6, step=1))),
-            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 3, 7, step=2), decimals=1),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 5, 11, step=1))),
+            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 5, 11, step=1))),
+            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
+            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 0, 3, step=1)),
+            "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
+            "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
+            "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
+            "lr_last": np.round(10 ** (-1 * trial.suggest_int("lr_last", 1, 7, step=1)), decimals=6),
+            "lr_second_last_factor": trial.suggest_int("lr_second_last_factor", 1, 101, step=10),
+            "batch_size": int(2 ** (trial.suggest_int("batch_size", 4, 6, step=1))),
+            "p_dropout": np.round(0.1 * trial.suggest_int("p_drop", 3, 9, step=2), decimals=1),
             "use_batch_norm": trial.suggest_categorical("use_batch_norm", [False, True]),
         }
 
@@ -219,8 +223,12 @@ class OptunaParamFinder:
             distributions = {k: {"name": type(v).__name__, **v._asdict()} for k, v in
                              self.study.trials[-1].distributions.items()}
             filepath = self.results_dir + distr_file
-            f = open(filepath, "w") if self.s3 is None else self.s3.open(filepath, "w")
-            _ = json.dump(distributions, f, indent=4)
+            if self.s3 is None:
+                with open(filepath, "w") as f:
+                    _ = json.dump(distributions, f, indent=4)
+            else:
+                with self.s3.open(filepath, "w") as f:
+                    _ = json.dump(distributions, f, indent=4)
             print("Study stored!")
 
         if not self.double_output:
@@ -336,7 +344,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_optuna1"
+    model_name1 = "cropped_projection_resnext50_optuna_morefreedom"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
@@ -360,7 +368,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define Optuna model
-    n_trials1 = 50
+    n_trials1 = 100
     output_metric1 = "mcc"
     double_output1 = False
     search_for_untracked_models1 = False

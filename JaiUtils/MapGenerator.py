@@ -41,13 +41,13 @@ class MapGenerator:
         addon = "" if not is_cropped else "cropped_"
         self.selected_segments = selected_segments
         self.selected_projection = selected_projection
-        self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_validation",
+        self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_training",
                                                    selected_segments=selected_segments,
                                                    selected_projection=selected_projection)
         self.val_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_validation",
                                                  selected_segments=selected_segments,
                                                  selected_projection=selected_projection)
-        self.test_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_validation",
+        self.test_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_test",
                                                   selected_segments=selected_segments,
                                                   selected_projection=selected_projection)
 
@@ -60,7 +60,7 @@ class MapGenerator:
         PretrainedFeatureExtractor.freeze_layers(self.trainer.net, [])
 
         # Assess model
-        # self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
+        self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
         if not is_cropped:
             self.aggregate_evals()
 
@@ -459,7 +459,7 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
     trial_n1 = 34
     use_cuda1 = False
