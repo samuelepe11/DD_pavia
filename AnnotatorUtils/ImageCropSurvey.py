@@ -43,9 +43,10 @@ class ImageCropSurvey(MaskSurvey):
     checkbox_label = "Non ho individuato alcuna vertebra in nessuna delle proiezioni"
     cropping_ref_name = "cropping_ref.csv"
 
-    def __init__(self, dataset, desired_instances, dataset_name=None, blur=False, annotators_list=None, extra_col=0):
+    def __init__(self, dataset, desired_instances, dataset_name=None, blur=False, annotators_list=None, extra_col=0,
+                 no_shuffle=False):
         super(ImageCropSurvey, self).__init__(dataset, desired_instances, blur, dataset_name, is_crop_gui=True,
-                                              annotators_list=annotators_list, extra_col=extra_col)
+                                              annotators_list=annotators_list, extra_col=extra_col, no_shuffle=no_shuffle)
 
     def process_mask(self, name, count, count_all, mask_id, adjust_specifics, mask):
         if self.annotators_list is None:
@@ -158,6 +159,8 @@ class ImageCropSurvey(MaskSurvey):
         command_line_output = command_line_output.drop_duplicates(ignore_index=True)
 
         # Recover missing references
+        if "errata_corrige" in os.listdir(self.mask_dir):
+            self.annotators_list = ["errata_corrige"] + self.annotators_list
         for user in self.annotators_list:
             user_folder = self.mask_dir + user + "/"
             cropped_patches = [file for file in os.listdir(user_folder) if ".csv" not in file]
@@ -187,7 +190,10 @@ class ImageCropSurvey(MaskSurvey):
         for user in self.annotators_list:
             user_folder = self.mask_dir + user + "/"
             cropping_ref = pd.read_csv(user_folder + "adjusted_" + self.cropping_ref_name)
-            for row in cropping_ref.itertuples(index=False):
+            for idx, row in enumerate(cropping_ref.itertuples(index=False)):
+                previous_recurrences = [row_i for row_i in cropping_refs if row_i.annotator == "errata_corrige" and row_i.segment == row.segment and row_i.projection  == row.projection]
+                if len(previous_recurrences) == 0:
+                    continue
                 vertebra_name = row.vertebra_name
                 file_name = row.file_name
                 if vertebra_name == "S" or len(vertebra_name) > 1:
@@ -212,7 +218,8 @@ if __name__ == "__main__":
     np.random.seed(seed)
 
     # Define variables
-    working_dir1 = "./../../"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     dataset_name1 = "xray_dataset_training"
 
     # Define data
@@ -220,9 +227,18 @@ if __name__ == "__main__":
 
     # Launch app
     blur1 = False
-    annotators_list1 = ["salina", "ciccone", "brevi"]
-    survey = ImageCropSurvey(dataset=dataset1, desired_instances=dataset1.dicom_instances, dataset_name=dataset_name1,
-                             blur=blur1, annotators_list=annotators_list1, extra_col=1)
+    desired_instances1 = None
+    if desired_instances1 is None:
+        no_shuffle1 = False
+        annotators_list1 = ["salina", "ciccone", "brevi"]
+        desired_instances1 = dataset1.dicom_instances
+    else:
+        no_shuffle1 = True
+        annotators_list1 = None
+        patient_data = [dataset1.patient_data]
+
+    survey = ImageCropSurvey(dataset=dataset1, desired_instances=desired_instances1, dataset_name=dataset_name1,
+                             blur=blur1, annotators_list=annotators_list1, extra_col=1, no_shuffle=no_shuffle1)
     print("Add '?__theme=dark' at the end of the link")
     # survey.build_app()
 

@@ -39,7 +39,7 @@ class MaskSurvey:
     cropping_ref_name = None
 
     def __init__(self, dataset, desired_instances, blur=False, dataset_name=None, is_crop_gui=False, annotators_list=None,
-                 extra_col=0):
+                 extra_col=0, no_shuffle=False):
         self.users = None
         self.dataset = dataset
         if dataset_name is not None:
@@ -49,7 +49,8 @@ class MaskSurvey:
         self.is_crop_gui = is_crop_gui
 
         self.desired_instances = desired_instances
-        random.shuffle(self.desired_instances)
+        if not no_shuffle:
+            random.shuffle(self.desired_instances)
         self.blur = blur
 
         self.annotators_list = annotators_list
@@ -196,7 +197,8 @@ class MaskSurvey:
             label = ""
         else:
             if item is None:
-                item, _ = self.dataset.__getitem__(count_all)
+                instance_id = self.dataset.dicom_instances.index(self.desired_instances[count_all])
+                item, _ = self.dataset.__getitem__(instance_id)
             projection_id, img, label = item[mask_id]
 
             img = np.int32(img / np.max(img) * 255)
@@ -264,7 +266,8 @@ class MaskSurvey:
             instance = desired_instances[count]
             _, segment = PatientInstance.get_patient_and_segment(instance)
             out_txt = self.get_label(count, segment, name)
-            item, _ = self.dataset.__getitem__(count_all)
+            instance_id = self.dataset.dicom_instances.index(self.desired_instances[count_all])
+            item, _ = self.dataset.__getitem__(instance_id)
             mask_blocks = []
             for j in range(self.max_projection_number):
                 addon = []
@@ -343,7 +346,12 @@ class MaskSurvey:
             user_folder = self.mask_dir + name + "/"
             if self.cropping_ref_name in os.listdir(user_folder):
                 cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name)
-                annotated_segments = cropping_ref["segment"].unique().tolist()
+                print(cropping_ref)
+                try:
+                    annotated_segments = cropping_ref["segment"].unique().tolist()
+                except KeyError:
+                    cropping_ref = pd.read_csv(user_folder + self.cropping_ref_name, sep=";")
+                    annotated_segments = cropping_ref["segment"].unique().tolist()
                 count = len(annotated_segments)
             else:
                 count = 0
