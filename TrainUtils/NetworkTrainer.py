@@ -157,7 +157,8 @@ class NetworkTrainer:
         if not self.n_parallel_gpu:
             net.set_cuda(cuda=self.use_cuda)
         else:
-            net = nn.DataParallel(net)
+            if not isinstance(net, nn.DataParallel):
+                net = nn.DataParallel(net)
             net = net.cuda()
             
         if self.use_cuda:
@@ -196,10 +197,10 @@ class NetworkTrainer:
                 loss.backward()
                 self.optimizer.step()
 
-            train_loss = train_loss / len(self.train_loader)
+            train_loss = train_loss / len(loader)
             self.train_losses.append(train_loss)
 
-            train_acc = train_acc / len(self.train_loader)
+            train_acc = train_acc / len(loader)
             self.train_accuracies.append(train_acc)
 
             if show_epochs and (epoch % 10 == 0 or epoch % self.val_epochs == 0):
@@ -273,6 +274,7 @@ class NetworkTrainer:
         item, extra = instance
         projection_type_batch, projection_batch, _ = item
         input = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
+        input = input.to(self.device)
 
         y = (item[-1] != "").astype(int)
         y = torch.tensor(np.array(y)).to(torch.float32)
@@ -604,7 +606,7 @@ class NetworkTrainer:
         input = torch.from_numpy(input)
         return input
 
-    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=2):
+    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=1):
         sampled_neg_idx = np.random.choice(neg_idx, size=neg_proportion*len(pos_idx), replace=False)
         epoch_indices = np.concatenate([pos_idx, sampled_neg_idx])
         np.random.shuffle(epoch_indices)
@@ -648,7 +650,7 @@ class NetworkTrainer:
             extra_proj = max_proj_num - len(segment_data)
             if extra_proj > 0:
                 for _ in range(extra_proj):
-                    temp.append((proj_id, np.zeros((img_dim, img_dim)), descr))
+                    temp.append((proj_id, np.zeros((img_w, img_h)), descr))
             segment_datas_patched.append(temp)
 
         batch_proj_id = []
@@ -770,7 +772,7 @@ class NetworkTrainer:
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         if batch_size is not None:
-            trainer1.batch_size = batch_size
+            network_trainer.batch_size = batch_size
 
         # Handle models created with Optuna
         if trial_n is None and network_trainer.model_name.endswith("_optuna"):
@@ -828,11 +830,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
-    net_type1 = NetType.BASE_RES_NEXT101
-    epochs1 = 200
+    model_name1 = "cropped_projection_vit_test"
+    net_type1 = NetType.BASE_RES_NEXT50
+    epochs1 = 2
     preprocess_inputs1 = False
-    trial_n1 = 34
+    trial_n1 = None
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
@@ -858,7 +860,7 @@ if __name__ == "__main__":
                                           selected_projection=selected_projection1)
 
     # Define trainer
-    net_params1 = {"n_conv_segment_neurons": 512, "n_conv_view_neurons": 512, "n_conv_segment_layers": 1,
+    net_params1 = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 512, "n_conv_segment_layers": 0,
                    "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
                    "lr_last": 0.001, "lr_second_last_factor": 10, "batch_size": 64, "p_dropout": 0.5,
                    "use_batch_norm": False}
@@ -870,9 +872,9 @@ if __name__ == "__main__":
                               dynamic_under_sampling=dynamic_under_sampling1)
 
     # Train model
-    # trainer1.train(show_epochs=True)
-    # trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-    #                                assess_calibration=assess_calibration1)'''
+    trainer1.train(show_epochs=True)
+    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)
     
     # Evaluate model
     print()

@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     # Define trainer
     model_name1 = "yolo"
-    n_classes1 = 1
+    n_classes1 = 2
     selected_model1 = "yolov8x.pt"
     augment1 = True
     trainer1 = YOLOTrainer(working_dir=working_dir1, train_data=train_data1, val_data=val_data1, test_data=test_data1,
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     #trainer1.train(epochs=epochs1, img_size=img_size1, batch=batch1, use_cuda=use_cuda1, tune=tune1)
 
     # Load and test model
-    trainer1 = YOLOTrainer.load_model(working_dir=working_dir1, model_name=model_name1, n_classes=n_classes1)
+    '''trainer1 = YOLOTrainer.load_model(working_dir=working_dir1, model_name=model_name1, n_classes=n_classes1)
     trainer1.save_predictions("training", tune=tune1)
     trainer1.save_predictions("validation", tune=tune1)
-    trainer1.save_predictions("test", tune=tune1)
+    trainer1.save_predictions("test", tune=tune1)'''

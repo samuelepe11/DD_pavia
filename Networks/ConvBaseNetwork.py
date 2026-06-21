@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 from torch.nn.parallel.scatter_gather import scatter
+from transformers import xnli_processors
 
 from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
 from Networks.ConvBranch import ConvBranch
@@ -60,18 +61,25 @@ class ConvBaseNetwork(nn.Module):
                                                             n_removable_layers=self.n_removable_layers)
 
         # Define new convolutional branches
-        self.conv_segment_sizes = ([self.feature_extractor.output_channels] + [params["n_conv_segment_neurons"]]
-                                   * params["n_conv_segment_layers"])
-        self.segment_branches = nn.ModuleList([ConvBranch(channels=self.conv_segment_sizes,
-                                                          kernel_size=self.kernel_size, p_drop=params["p_dropout"],
-                                                          use_norm=params["use_batch_norm"])
-                                               for _ in XrayDataset.segment_dict.keys()])
+        if params["n_conv_segment_neurons"] != 0:
+            self.conv_segment_sizes = ([self.feature_extractor.output_channels] + [params["n_conv_segment_neurons"]]
+                                       * params["n_conv_segment_layers"])
+            self.segment_branches = nn.ModuleList([ConvBranch(channels=self.conv_segment_sizes,
+                                                              kernel_size=self.kernel_size, p_drop=params["p_dropout"],
+                                                              use_norm=params["use_batch_norm"])
+                                                   for _ in XrayDataset.segment_dict.keys()])
 
-        self.conv_view_sizes = ([params["n_conv_segment_neurons"]] + [params["n_conv_view_neurons"]]
-                                * params["n_conv_view_layers"])
-        self.view_branches = nn.ModuleList([ConvBranch(channels=self.conv_view_sizes, kernel_size=self.kernel_size,
-                                                       p_drop=params["p_dropout"], use_norm=params["use_batch_norm"])
-                                            for _ in ProjectionType])
+            self.conv_view_sizes = ([params["n_conv_segment_neurons"]] + [params["n_conv_view_neurons"]]
+                                    * params["n_conv_view_layers"])
+            self.view_branches = nn.ModuleList([ConvBranch(channels=self.conv_view_sizes, kernel_size=self.kernel_size,
+                                                           p_drop=params["p_dropout"], use_norm=params["use_batch_norm"])
+                                                for _ in ProjectionType])
+        else:
+            self.segment_branches = None
+            self.conv_view_sizes = ([self.feature_extractor.output_channels] + [params["n_conv_view_neurons"]]
+                                    * params["n_conv_view_layers"])
+            self.view_branches = ConvBranch(channels=self.conv_view_sizes, kernel_size=self.kernel_size,
+                                            p_drop=params["p_dropout"], use_norm=params["use_batch_norm"])
 
         # Define final fully connected layers
         self.fc_sizes = [self.conv_view_sizes[-1]] * params["n_fc_layers"]
@@ -116,7 +124,10 @@ class ConvBaseNetwork(nn.Module):
             x = x.contiguous()
 
         # Segment- and view-specific processing
-        x_processed = self.apply_convolutional_branches(x, batch_size, n_channels, segment_ids, view_ids)
+        if self.segment_branches is not None:
+            x_processed = self.apply_convolutional_branches(x, batch_size, n_channels, segment_ids, view_ids)
+        else:
+            x_processed = self.view_branches(x)
 
         # Reconstruct batch dimensions
         x_processed = x_processed.view(batch_size, n_channels, *x_processed.shape[1:])
