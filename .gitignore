@@ -10,3 +10,4 @@ TrainUtils/.ipynb_checkpoints/
 TrainUtils/yolov8n.pt
 TrainUtils/yolov8x.pt
 TrainUtils/yolo26n.pt
+TrainUtils/bicocca_weights.pt

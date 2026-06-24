@@ -28,6 +28,7 @@ from Networks.BaseResNeXt101 import BaseResNeXt101
 from Networks.BaseViT import BaseViT
 from Networks.AttentionViT import AttentionViT
 from Networks.MLPLocator import MLPLocator
+from Networks.BaseResNeXt50Bicocca import BaseResNeXt50Bicocca
 from TrainUtils.StatsHolder import StatsHolder
 
 
@@ -71,6 +72,8 @@ class NetworkTrainer:
             self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.LOCATOR_DEFAULT:
             self.net = MLPLocator(params=self.net_params, device=self.device)
+        elif self.net_type == NetType.BASE_BICOCCA:
+            self.net = BaseResNeXt50Bicocca(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -270,7 +273,7 @@ class NetworkTrainer:
             else:
                 return val_output
 
-    def apply_network(self, net, instance, set_type, is_vit_mae=False):
+    def apply_network(self, net, instance, set_type, is_vit_mae=False, zero_shot=False):
         item, extra = instance
         projection_type_batch, projection_batch, _ = item
         input = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
@@ -282,15 +285,29 @@ class NetworkTrainer:
         y = y.to(self.device)
 
         # Loss evaluation
-        if not is_vit_mae:
+        if not is_vit_mae and not zero_shot:
             output = net(input, extra[1], projection_type_batch, self.n_parallel_gpu)
         else:
+            if zero_shot:
+                input = input.repeat(1, 3, 1, 1)
+                input = input.permute(0, 2, 3, 1).numpy().astype(np.uint8)
+                input = [self.net.inference_data_transforms(img) for img in input]
+                input = torch.stack(input)
+                net.to(self.device)
+                net.eval()
             output = net(input)
-        loss = self.criterion(output, y)
+        probs = output if ((not self.weights_loss or self.dynamic_under_sampling) and not zero_shot) else torch.sigmoid(
+            output)
+        if not zero_shot:
+            loss = self.criterion(probs, y)
+        else:
+            loss = self.criterion(probs[:, 1], y[:, 0])
 
         # Accuracy evaluation
-        probs = output if (not self.weights_loss or self.dynamic_under_sampling) else torch.sigmoid(output)
-        pred = (probs > 0.5).to(torch.int)
+        if not zero_shot:
+            pred = (probs > 0.5).to(torch.int)
+        else:
+            pred = (probs[:, 1] > 0.5).to(torch.int)
         acc = torch.sum(pred == y) / y.shape[0]
 
         return loss, output, y, acc
@@ -352,15 +369,19 @@ class NetworkTrainer:
         stats = StatsHolder(loss, acc, tp, tn, fp, fn, auc)
         return stats
 
-    def test(self, set_type=SetType.TRAIN, show_cm=False, assess_calibration=False, threshold=0.5):
-        net = self.net
-        if not self.n_parallel_gpu:
-            net.set_cuda(cuda=self.use_cuda)
-            net.set_training(False)
+    def test(self, set_type=SetType.TRAIN, show_cm=False, assess_calibration=False, threshold=0.5, zero_shot=False):
+        net = self.net if not zero_shot else self.net.feature_extractor_model
+        if not zero_shot:
+            if not self.n_parallel_gpu:
+                net.set_cuda(cuda=self.use_cuda)
+                net.set_training(False)
+            else:
+                net = nn.DataParallel(net)
+                net = net.cuda()
+                net.eval()
         else:
-            net = nn.DataParallel(net)
-            net = net.cuda()
             net.eval()
+            self.net.training = False
             
         if self.use_cuda:
             self.criterion = self.criterion.cuda()
@@ -375,7 +396,7 @@ class NetworkTrainer:
         loss = 0
         with torch.no_grad():
             for batch in loader:
-                temp_loss, output, y, _ = self.apply_network(net, batch, set_type=set_type)
+                temp_loss, output, y, _ = self.apply_network(net, batch, set_type=set_type, zero_shot=zero_shot)
                 loss += temp_loss.item()
 
                 # Accuracy evaluation
@@ -486,10 +507,10 @@ class NetworkTrainer:
         print()
 
     def summarize_performance(self, show_test=False, show_process=False, show_cm=False, trial_n=None,
-                              assess_calibration=False, threshold=0.5):
+                              assess_calibration=False, threshold=0.5, zero_shot=False):
         # Show final losses
         train_stats = self.test(set_type=SetType.TRAIN, show_cm=show_cm, assess_calibration=assess_calibration,
-                                threshold=threshold)
+                                threshold=threshold, zero_shot=zero_shot)
         print("Training loss = " + str(np.round(train_stats.loss, 5)) + " - Training accuracy = " +
               str(np.round(train_stats.acc * 100, 7)) + "% - Training F1-score = " +
               str(np.round(train_stats.f1 * 100, 7)) + "%")
@@ -500,7 +521,7 @@ class NetworkTrainer:
 
         print()
         val_stats = self.test(set_type=SetType.VAL, show_cm=show_cm, assess_calibration=assess_calibration,
-                              threshold=threshold)
+                              threshold=threshold, zero_shot=zero_shot)
         print("Validation loss = " + str(np.round(val_stats.loss, 5)) + " - Validation accuracy = " +
               str(np.round(val_stats.acc * 100, 7)) + "% - Validation F1-score = " +
               str(np.round(val_stats.f1 * 100, 7)))
@@ -512,7 +533,7 @@ class NetworkTrainer:
         if show_test:
             print()
             test_stats = self.test(set_type=SetType.TEST, show_cm=show_cm, assess_calibration=assess_calibration,
-                                   threshold=threshold)
+                                   threshold=threshold, zero_shot=zero_shot)
             print("Test loss = " + str(np.round(test_stats.loss, 5)) + " - Test accuracy = " +
                   str(np.round(test_stats.acc * 100, 7)) + "% - Test F1-score = " +
                   str(np.round(test_stats.f1 * 100, 7)))
@@ -606,7 +627,7 @@ class NetworkTrainer:
         input = torch.from_numpy(input)
         return input
 
-    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=1):
+    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=2):
         sampled_neg_idx = np.random.choice(neg_idx, size=neg_proportion*len(pos_idx), replace=False)
         epoch_indices = np.concatenate([pos_idx, sampled_neg_idx])
         np.random.shuffle(epoch_indices)
@@ -828,15 +849,15 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    # working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_vit_test"
-    net_type1 = NetType.BASE_RES_NEXT50
+    working_dir1 = "./../../"
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_bicocca_test"
+    net_type1 = NetType.BASE_BICOCCA
     epochs1 = 2
     preprocess_inputs1 = False
     trial_n1 = None
     val_epochs1 = 10
-    use_cuda1 = True
+    use_cuda1 = False
     assess_calibration1 = True
     show_test1 = True
     projection_dataset1 = True
@@ -845,11 +866,11 @@ if __name__ == "__main__":
     enhance_images1 = False
     full_size1 = False
     is_cropped1 = True
-    weight_loss1 = True
-    dynamic_under_sampling1 = True
+    weight_loss1 = False
+    dynamic_under_sampling1 = False
 
     # Load data
-    addon = "" if not is_cropped1 else "cropped_"
+    addon = "" if not is_cropped1 else "extended_cropped_"
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
@@ -858,6 +879,7 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
+    # bicocca_only_dataset = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="DD_bicocca")
 
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 512, "n_conv_segment_layers": 0,
@@ -870,6 +892,10 @@ if __name__ == "__main__":
                               use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
                               full_size=full_size1, is_cropped=is_cropped1, weight_loss=weight_loss1,
                               dynamic_under_sampling=dynamic_under_sampling1)
+
+    # Test zero-shot Bicocca model
+    trainer1.summarize_performance(show_test=False, show_process=False, show_cm=False, assess_calibration=False,
+                                   zero_shot=True)
 
     # Train model
     trainer1.train(show_epochs=True)

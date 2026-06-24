@@ -152,6 +152,7 @@ class OptunaParamFinder:
         self.study.optimize(lambda trial: self.objective(trial), self.n_trials, callbacks=[self.store_best_candidates])
 
     def objective(self, trial):
+        self.current_trainer = None
         # Store previous results
         if self.counter >= 2:
             self.analyze_study(show_best=False)
@@ -203,6 +204,10 @@ class OptunaParamFinder:
             print(f"An error occurred: {e}")
             val_metric = 0
             train_metric = 0
+
+        if not np.isfinite(val_metric):
+            self.current_trainer = None
+            raise TrialPruned()
 
         if not self.double_output:
             return val_metric
@@ -322,6 +327,16 @@ class OptunaParamFinder:
         self.store_best_candidates(None, trial)
 
     def store_best_candidates(self, study, trial):
+        if trial.state != TrialState.COMPLETE:
+            return
+
+        if not self.double_output:
+            if trial.value is None or not np.isfinite(trial.value):
+                return
+        else:
+            if trial.values is None or not all(np.isfinite(v) for v in trial.values):
+                return
+
         is_best_candidate = True
         for past_trial in self.best_trials:
             if self.double_output:

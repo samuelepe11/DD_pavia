@@ -23,10 +23,10 @@ class ExtraDatasetType(Enum):
 
     def get_ref_id_start(self):
         if self == ExtraDatasetType.BUU:
-            return 10000
+            return 100000
         elif self == ExtraDatasetType.AASCE:
-            return 20000
+            return 200000
         elif self == ExtraDatasetType.DD:
-            return 30000
+            return 300000
         else:
             return 0

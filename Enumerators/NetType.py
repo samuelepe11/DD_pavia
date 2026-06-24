@@ -10,3 +10,4 @@ class NetType(Enum):
     BASE_VIT = "Visual Transformer model for preprocessing"
     ATTENTION_VIT = "Visual Transformer model for post-processing"
     LOCATOR_DEFAULT = "Simple MLP for vertebra location and classification"
+    BASE_BICOCCA = "ResNeXt-50 model trained on X-ray dataset from Bicocca for preprocessing"

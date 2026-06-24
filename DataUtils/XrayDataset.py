@@ -145,20 +145,25 @@ class XrayDataset(Dataset):
         if not flag:
             print("Patient", pt_id, "not found...")
 
-    def count_data(self, is_extra=False, is_cropped=False):
+    def count_data(self, is_extra=False, is_cropped=False, only_extra_name=None):
         # Define directory for preliminary evaluation
         if self.set_type is None:
             self.preliminary_dir += "pooled/"
         else:
-            if is_extra:
-                addon = "extra_"
-            elif is_cropped:
-                addon = "cropped_"
+            if only_extra_name is not None:
+                if only_extra_name not in os.listdir(self.preliminary_dir):
+                    os.mkdir(self.preliminary_dir + only_extra_name)
+                self.preliminary_dir += only_extra_name + "/"
             else:
-                addon = ""
-            if addon + self.set_type.value not in os.listdir(self.preliminary_dir):
-                os.mkdir(self.preliminary_dir + addon + self.set_type.value)
-            self.preliminary_dir += addon + self.set_type.value + "/"
+                if is_extra:
+                    addon = "extra_"
+                elif is_cropped:
+                    addon = "cropped_"
+                else:
+                    addon = ""
+                if addon + self.set_type.value not in os.listdir(self.preliminary_dir):
+                    os.mkdir(self.preliminary_dir + addon + self.set_type.value)
+                self.preliminary_dir += addon + self.set_type.value + "/"
 
         # Count patients
         n_pt = len(self.patient_data)
@@ -221,6 +226,8 @@ class XrayDataset(Dataset):
             s_pt = [pt for pt in self.patient_data if s in pt.segments]
             n_s_pt = len(s_pt)
             print(" -", s_name, n_s_pt)
+            if n_s_pt == 0:
+                continue
 
             plt.subplot(2, 2, 1)
             n_s_pt_frac = len([pt for pt in XrayDataset.get_fracture_patients(s_pt) if s in
@@ -255,9 +262,10 @@ class XrayDataset(Dataset):
                                       "Projection type distribution", None)
 
             plt.subplot(2, 2, 3)
-            XrayDataset.draw_pie_plot([n_ap - n_frac_ap, n_frac_ap], self.classes,
-                                      "Fractures per projection " + projection_names[0],
-                                      None)
+            if n_ap != 0:
+                XrayDataset.draw_pie_plot([n_ap - n_frac_ap, n_frac_ap], self.classes,
+                                          "Fractures per projection " + projection_names[0],
+                                          None)
             plt.subplot(2, 2, 4)
             XrayDataset.draw_pie_plot([n_lat - n_frac_lat, n_frac_lat], self.classes,
                                       "Fractures per projection " + projection_names[1],
@@ -284,6 +292,8 @@ class XrayDataset(Dataset):
                                 n_p_pt_frac += 1
 
             print(" -", p.value, n_p_pt)
+            if n_p_pt == 0:
+                continue
 
             plt.subplot(1, 2, i)
             n_s_pt_no_frac = n_p_pt - n_p_pt_frac
@@ -346,7 +356,7 @@ class XrayDataset(Dataset):
         ind = self.dicom_instances.index(name)
         return self.__getitem__(ind)
 
-    def complement_with_extra_data(self, extra_dataset_type):
+    def complement_with_extra_data(self, extra_dataset_type, only_extra=False):
         dataset_name = extra_dataset_type.get_dataset_name()
         if extra_dataset_type != ExtraDatasetType.CROPPED:
             sub_fold = self.extra_data_fold
@@ -422,15 +432,17 @@ class XrayDataset(Dataset):
                                                                   img_segm_pt))
 
             elif extra_dataset_type == ExtraDatasetType.DD:
+                if only_extra:
+                    self.patient_data = []
                 pt_ids = []
                 img_segm_ids = []
                 img_labels = []
                 vertebra_names = []
                 for name in img_names:
                     if name[0] == "x":
-                        pt_ids.append(int(name.split("_")[2].split(".")[0]) + 500)
+                        pt_ids.append(int(name.split("-")[3].split("_")[0]))
                         img_segm_ids.append("L")
-                        img_labels.append("L")
+                        img_labels.append("")
                         vertebra_names.append("L")
                     else:
                         sep = "-" if "-" in name else "_"
@@ -451,7 +463,7 @@ class XrayDataset(Dataset):
                     pt_instances = []
                     for name in img_names:
                         if name[0] == "x":
-                            tmp_id = int(name.split("_")[2].split(".")[0]) + 500
+                            tmp_id = int(name.split("-")[3].split("_")[0])
                         else:
                             sep = "-" if "-" in name else "_"
                             tmp_id = int(name.split(sep)[0])
@@ -468,7 +480,7 @@ class XrayDataset(Dataset):
                             img_proj_pt.append(img_proj_ids[i])
                             img_label_pt.append(img_labels[i])
                             vertebra_name_pt.append(vertebra_names[i])
-                    segments = np.unique(img_segm_ids).tolist()
+                    segments = np.unique(img_segm_pt).tolist()
                     for segm_id in segments:
                         new_instances.append(str(new_id) + segm_id.lower())
 
@@ -479,8 +491,12 @@ class XrayDataset(Dataset):
                 new_instances = []
                 print(extra_dataset_type, "is not available!")
 
-            self.dicom_instances += new_instances
-            self.len += len(new_instances)
+            if not only_extra:
+                self.dicom_instances += new_instances
+                self.len += len(new_instances)
+            else:
+                self.dicom_instances = new_instances
+                self.len = len(new_instances)
             self.training_pts = [pt_datum.id for pt_datum in self.patient_data]
 
         else:
@@ -536,7 +552,7 @@ class XrayDataset(Dataset):
         dataset.len = len(dataset.dicom_instances)
 
         # Correct mistakes in previously stored files
-        if correct_mistakes and not "cropped" in dataset_name:
+        if correct_mistakes and not ("cropped" in dataset_name) and not ("DD_bicocca" in dataset_name):
             for i in range(dataset.len):
                 instance = dataset.dicom_instances[i]
                 instance_list = list(instance)
@@ -546,7 +562,7 @@ class XrayDataset(Dataset):
                     dataset.dicom_instances[i] = "".join(instance_list[:3] + [instance_list[4]])
 
         # Correct mistakes in the original data files
-        if correct_mistakes and not "cropped" in dataset_name:
+        if correct_mistakes and not ("cropped" in dataset_name) and not ("DD_bicocca" in dataset_name):
             for datum in dataset.patient_data:
                 if datum.fracture_position is not None:
                     frac_pos = []
@@ -650,7 +666,7 @@ if __name__ == "__main__":
 
     # Define variables
     working_dir1 = "./../../"
-    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     info_file_name1 = "database_fratture_vertebrali_rx.csv"
     dicom_folder_name1 = "RX colonne anonoimizzate/"
     dataset_name1 = "xray_dataset"
@@ -691,7 +707,7 @@ if __name__ == "__main__":
     # dataset1.count_data()
 
     # Load an already split datasets
-    dataset_name1 = "xray_dataset_training"
+    dataset_name1 = "cropped_xray_dataset_validation"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
                                         selected_projection=None)
 
@@ -703,12 +719,21 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    # extra_dataset_types1 = [ExtraDatasetType.BUU, ExtraDatasetType.AASCE, ExtraDatasetType.DD]
-    extra_dataset_types1 = [ExtraDatasetType.CROPPED]
+    only_extra1 = False
+    extra_dataset_types1 = [ExtraDatasetType.DD]
+    # extra_dataset_types1 = [ExtraDatasetType.CROPPED]
     for extra_dataset_type1 in extra_dataset_types1:
         print("Processing", extra_dataset_type1.value + "...")
-        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1)
-    addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "extended_"
+        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1)
+
+    if only_extra1:
+        dataset_name1 = extra_dataset_types1[0].get_dataset_name()
+        addon1 = ""
+    else:
+        addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "extended_"
+    dataset1.data_dir = working_dir1 + XrayDataset.data_fold
+    dataset1.results_dir = working_dir1 + XrayDataset.results_fold
+    dataset1.preliminary_dir = dataset1.results_dir + XrayDataset.preliminary_fold
     dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
@@ -719,4 +744,4 @@ if __name__ == "__main__":
 
     is_cropped1 = ExtraDatasetType.CROPPED in extra_dataset_types1
     is_extra1 = not is_cropped1
-    dataset1.count_data(is_extra=is_extra1, is_cropped=is_cropped1)
+    dataset1.count_data(is_extra=is_extra1, is_cropped=is_cropped1, only_extra_name=dataset_name1 if only_extra1 else None)
