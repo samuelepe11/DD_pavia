@@ -24,6 +24,6 @@ class BaseResNeXt50Bicocca(ConvBaseNetwork):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    def __init__(self, params=None, device="cpu", weight_loss=False):
+    def __init__(self, params=None, device="cpu", weight_loss=False, transpose=False):
         super(BaseResNeXt50Bicocca, self).__init__(feature_extractor_model=self.feature_extractor_model, params=params,
-                                                   device=device, weight_loss=weight_loss)
+                                                   device=device, weight_loss=weight_loss, transpose=transpose)

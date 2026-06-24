@@ -40,7 +40,7 @@ class NetworkTrainer:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False,
-                 is_cropped=False, weight_loss=False, dynamic_under_sampling=False):
+                 is_cropped=False, weight_loss=False, dynamic_under_sampling=False, transpose=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -61,19 +61,19 @@ class NetworkTrainer:
         self.net_type = net_type if net_type is not None else self.default_net_type
         self.net_params = net_params if net_params is not None else self.default_net_params
         if self.net_type == NetType.BASE_RES_NEXT50:
-            self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
+            self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.BASE_RES_NET18:
-            self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
+            self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.BASE_RES_NEXT101:
-            self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
+            self.net = BaseResNeXt101(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.BASE_VIT:
-            self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
+            self.net = BaseViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.ATTENTION_VIT:
             self.net = AttentionViT(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
         elif self.net_type == NetType.LOCATOR_DEFAULT:
             self.net = MLPLocator(params=self.net_params, device=self.device)
         elif self.net_type == NetType.BASE_BICOCCA:
-            self.net = BaseResNeXt50Bicocca(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling)
+            self.net = BaseResNeXt50Bicocca(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         else:
             self.net = None
             print("The selected network is not available.")
@@ -494,13 +494,14 @@ class NetworkTrainer:
         optimizer = self.optimizer if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
         weight_loss = False if hasattr(self, "weight_loss") else self.weights_loss
         dynamic_under_sampling = False if hasattr(self, "dynamic_under_sampling") else self.dynamic_under_sampling
+        transpose = False if hasattr(self, "transpose") else self.transpose
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": net_params,
                     "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
                     "val_losses": self.val_losses, "val_eval_epochs": self.val_eval_epochs,
                     "enhance_images": self.enhance_images,
                     "optimizer_pretrain_state_dict": optimizer.state_dict(), "weight_loss": weight_loss,
-                    "dynamic_under_sampling": dynamic_under_sampling}, filepath)
+                    "dynamic_under_sampling": dynamic_under_sampling, "transpose": transpose}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -783,13 +784,15 @@ class NetworkTrainer:
             checkpoint.update({"enhance_images": False})
         weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
         dynamic_under_sampling = False if not "dynamic_under_sampling" in checkpoint.keys() else checkpoint["dynamic_under_sampling"]
+        transpose = False if not "transpose" in checkpoint.keys() else checkpoint["transpose"]
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
                                          preprocess_inputs=checkpoint["preprocess_inputs"],
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
                                          projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
-                                         is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling)
+                                         is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling,
+                                         transpose=transpose)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         if batch_size is not None:
@@ -870,13 +873,13 @@ if __name__ == "__main__":
     dynamic_under_sampling1 = False
 
     # Load data
-    addon = "" if not is_cropped1 else "extended_cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
+    addon = "" if not is_cropped1 else "cropped_"
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
     # bicocca_only_dataset = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="DD_bicocca")

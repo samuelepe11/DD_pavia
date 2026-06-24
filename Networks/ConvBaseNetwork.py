@@ -1,4 +1,5 @@
 # Import packages
+import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -36,11 +37,12 @@ class ConvBaseNetwork(nn.Module):
     n_removable_layers = 2
     freezable_layers = ["bn1", "conv1", "layer1", "layer2", "layer3"]
 
-    def __init__(self, feature_extractor_model, params, device="cpu", weight_loss=False):
+    def __init__(self, feature_extractor_model, params, device="cpu", weight_loss=False, transpose=False):
         super(ConvBaseNetwork, self).__init__()
         self.device = device
         self.params = params
         self.weight_loss = weight_loss
+        self.transpose = transpose
 
         # Define modules
         self.kernel_size = params["kernel_size"]
@@ -112,6 +114,8 @@ class ConvBaseNetwork(nn.Module):
         # Process all channels through the pre-trained convolutional network
         x = x.view(batch_size * n_channels, 1, height, width)
         x = x.repeat(1, 3, 1, 1)
+        if self.transpose:
+            x = x.permute(0, 2, 3, 1).numpy().astype(np.uint8)
 
         if self.training:
             x = [self.training_data_transforms(img) for img in x]

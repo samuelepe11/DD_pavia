@@ -12,6 +12,6 @@ class BaseViT(ConvBaseNetwork):
     freezable_layers = []
     feature_extractor_model = models.vit_b_32(weights=ViT_B_32_Weights.DEFAULT, progress=False)
 
-    def __init__(self, params=None, device="cpu", weight_loss=False):
+    def __init__(self, params=None, device="cpu", weight_loss=False, transpose=False):
         super(BaseViT, self).__init__(feature_extractor_model=self.feature_extractor_model, params=params,
-                                      device=device, weight_loss=weight_loss)
+                                      device=device, weight_loss=weight_loss, transpose=transpose)

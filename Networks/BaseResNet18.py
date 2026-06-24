@@ -11,6 +11,6 @@ class BaseResNet18(ConvBaseNetwork):
     freezable_layers = ["bn1", "conv1", "layer1", "layer2", "layer3"]
     feature_extractor_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
 
-    def __init__(self, params=None, device="cpu", weight_loss=False):
+    def __init__(self, params=None, device="cpu", weight_loss=False, transpose=False):
         super(BaseResNet18, self).__init__(feature_extractor_model=self.feature_extractor_model, params=params,
-                                           device=device, weight_loss=weight_loss)
+                                           device=device, weight_loss=weight_loss, transpose=transpose)
