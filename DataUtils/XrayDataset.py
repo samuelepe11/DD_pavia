@@ -665,8 +665,8 @@ if __name__ == "__main__":
     random.seed(seed)
 
     # Define variables
-    working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     info_file_name1 = "database_fratture_vertebrali_rx.csv"
     dicom_folder_name1 = "RX colonne anonoimizzate/"
     dataset_name1 = "xray_dataset"
@@ -719,7 +719,7 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    only_extra1 = False
+    only_extra1 = True
     extra_dataset_types1 = [ExtraDatasetType.DD]
     # extra_dataset_types1 = [ExtraDatasetType.CROPPED]
     for extra_dataset_type1 in extra_dataset_types1:

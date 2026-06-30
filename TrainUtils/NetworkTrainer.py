@@ -9,6 +9,7 @@ import time
 import matplotlib.pyplot as plt
 import optuna
 from sqlalchemy.testing import is_not_
+from tensorflow.python.ops.linalg.linalg_impl import transpose
 from torch.utils.data import DataLoader, Subset
 from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
@@ -128,6 +129,7 @@ class NetworkTrainer:
 
         self.dynamic_under_sampling = dynamic_under_sampling
         self.weights_loss = weight_loss
+        self.transpose = transpose
         if not weight_loss or dynamic_under_sampling:
             self.criterion = nn.BCELoss()
         else:
@@ -492,9 +494,9 @@ class NetworkTrainer:
             filepath = self.s3.open(filepath, "wb")
         net_params = self.net_params if not hasattr(self, "train_parameters") else self.train_parameters
         optimizer = self.optimizer if not hasattr(self, "optimizer_pretrain") else self.optimizer_pretrain
-        weight_loss = False if hasattr(self, "weight_loss") else self.weights_loss
+        weight_loss = False if not hasattr(self, "weight_loss") else self.weights_loss
         dynamic_under_sampling = False if hasattr(self, "dynamic_under_sampling") else self.dynamic_under_sampling
-        transpose = False if hasattr(self, "transpose") else self.transpose
+        transpose = False if not hasattr(self, "transpose") else self.transpose
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": net_params,
                     "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
@@ -852,11 +854,11 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
-    # working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_bicocca_test"
-    net_type1 = NetType.BASE_BICOCCA
-    epochs1 = 2
+    # working_dir1 = "./../../"
+    working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
+    model_name1 = "cropped_projection_resnext50_test"
+    net_type1 = NetType.BASE_RES_NEXT50
+    epochs1 = 200
     preprocess_inputs1 = False
     trial_n1 = None
     val_epochs1 = 10
@@ -870,24 +872,25 @@ if __name__ == "__main__":
     full_size1 = False
     is_cropped1 = True
     weight_loss1 = False
-    dynamic_under_sampling1 = False
+    dynamic_under_sampling1 = True
+    transpose1 = True
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
-    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
+    test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
                                           selected_projection=selected_projection1)
     # bicocca_only_dataset = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="DD_bicocca")
 
     # Define trainer
-    net_params1 = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 512, "n_conv_segment_layers": 0,
-                   "n_conv_view_layers": 1, "kernel_size": 3, "n_fc_layers": 1, "optimizer": "Adam",
-                   "lr_last": 0.001, "lr_second_last_factor": 10, "batch_size": 64, "p_dropout": 0.5,
+    net_params1 = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 0,
+                   "n_conv_view_layers": 2, "kernel_size": 7, "n_fc_layers": 4, "optimizer": "SGD",
+                   "lr_last": 0.00001, "lr_second_last_factor": 71, "batch_size": 32, "p_dropout": 0.9,
                    "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
@@ -897,8 +900,8 @@ if __name__ == "__main__":
                               dynamic_under_sampling=dynamic_under_sampling1)
 
     # Test zero-shot Bicocca model
-    trainer1.summarize_performance(show_test=False, show_process=False, show_cm=False, assess_calibration=False,
-                                   zero_shot=True)
+    # trainer1.summarize_performance(show_test=False, show_process=False, show_cm=False, assess_calibration=False,
+    #                                zero_shot=True)
 
     # Train model
     trainer1.train(show_epochs=True)

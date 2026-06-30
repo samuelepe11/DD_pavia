@@ -14,7 +14,7 @@ class BaseResNeXt50Bicocca(ConvBaseNetwork):
     # Define attributes
     feature_extractor_model = models.resnext50_32x4d(weights=ResNeXt50_32X4D_Weights.DEFAULT, progress=False)
     feature_extractor_model.fc = nn.Sequential(nn.Linear(feature_extractor_model.fc.in_features, 2))
-    feature_extractor_model.load_state_dict(torch.load("bicocca_weights.pt"))
+    # feature_extractor_model.load_state_dict(torch.load("bicocca_weights.pt"))
 
     inference_data_transforms = transforms.Compose([
         transforms.ToPILImage(),

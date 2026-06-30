@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 from torch.nn.parallel.scatter_gather import scatter
+from torch.onnx.symbolic_opset9 import detach
 from transformers import xnli_processors
 
 from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
@@ -115,7 +116,8 @@ class ConvBaseNetwork(nn.Module):
         x = x.view(batch_size * n_channels, 1, height, width)
         x = x.repeat(1, 3, 1, 1)
         if self.transpose:
-            x = x.permute(0, 2, 3, 1).numpy().astype(np.uint8)
+            x = x.permute(0, 2, 3, 1)
+            x = x.detach().cpu().numpy().astype(np.uint8)
 
         if self.training:
             x = [self.training_data_transforms(img) for img in x]

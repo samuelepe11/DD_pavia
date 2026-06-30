@@ -207,6 +207,7 @@ class OptunaParamFinder:
             train_metric = 0
 
         if not np.isfinite(val_metric):
+            print("Forcing pruning due to unfinite value:", val_metric)
             self.current_trainer = None
             raise TrialPruned()
 
@@ -328,11 +329,9 @@ class OptunaParamFinder:
         self.store_best_candidates(None, trial)
 
     def store_best_candidates(self, study, trial):
-        if trial.state != TrialState.COMPLETE:
-            return
-
         if not self.double_output:
             if trial.value is None or not np.isfinite(trial.value):
+                print("Attempting to store a trial with non-finite value:", trial.value)
                 return
         else:
             if trial.values is None or not all(np.isfinite(v) for v in trial.values):
@@ -360,7 +359,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler_morebalance"
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_extendeddata"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
@@ -374,7 +373,7 @@ if __name__ == "__main__":
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
