@@ -10,6 +10,7 @@ import random
 import copy
 from torch.utils.data import Dataset
 from datetime import datetime
+from torchvision import transforms
 
 from DataUtils.PatientInstance import PatientInstance
 from DataUtils.ExtraPatientInstance import ExtraPatientInstance
@@ -145,7 +146,7 @@ class XrayDataset(Dataset):
         if not flag:
             print("Patient", pt_id, "not found...")
 
-    def count_data(self, is_extra=False, is_cropped=False, only_extra_name=None):
+    def count_data(self, is_extra=False, is_cropped=False, only_extra_name=None, is_augmented=False):
         # Define directory for preliminary evaluation
         if self.set_type is None:
             self.preliminary_dir += "pooled/"
@@ -161,6 +162,8 @@ class XrayDataset(Dataset):
                     addon = "cropped_"
                 else:
                     addon = ""
+                    if is_augmented:
+                        addon = "augmented_" + addon
                 if addon + self.set_type.value not in os.listdir(self.preliminary_dir):
                     os.mkdir(self.preliminary_dir + addon + self.set_type.value)
                 self.preliminary_dir += addon + self.set_type.value + "/"
@@ -365,7 +368,7 @@ class XrayDataset(Dataset):
             sub_fold += "xray_dataset_" + self.set_type.value + "_cropped_imgs/"
         dataset_path = self.working_dir + sub_fold + dataset_name + "/"
 
-        if extra_dataset_type != ExtraDatasetType.CROPPED:
+        if extra_dataset_type not in [ExtraDatasetType.CROPPED, ExtraDatasetType.AUGMENT]:
             ref_id_start = extra_dataset_type.get_ref_id_start()
             img_names = []
             img_proj_ids = []
@@ -498,6 +501,40 @@ class XrayDataset(Dataset):
                 self.dicom_instances = new_instances
                 self.len = len(new_instances)
             self.training_pts = [pt_datum.id for pt_datum in self.patient_data]
+
+        elif extra_dataset_type == ExtraDatasetType.AUGMENT:
+            new_patient_data = self.patient_data.copy()
+            for i, patient in enumerate(self.patient_data):
+                new_pt_data = []
+                for segment in patient.pt_data:
+                    new_segment_data = []
+                    for proj in segment:
+                        proj_id, img, lbl, extra = proj
+                        new_segment_data.append(proj)
+                        if lbl == "":
+                            continue
+                        h, w = img.shape
+                        for _ in range(10):
+                            augmented_h = int(np.random.normal(loc=h, scale=0.20 * h))
+                            augmented_w = int(np.random.normal(loc=w, scale=0.20 * w))
+                            augmenter = transforms.Compose([
+                                transforms.ToPILImage(),
+                                transforms.Resize((augmented_h, augmented_w)),
+                                transforms.RandomOrder([
+                                    transforms.RandomAffine(degrees=10, translate=(0.01, 0.01), scale=(0.8, 1.2),
+                                                            fill=int(np.mean(img))),
+                                    transforms.RandomHorizontalFlip(p=0.3),
+                                    transforms.ColorJitter(brightness=0.1, contrast=0.1),
+                                    transforms.GaussianBlur(kernel_size=11, sigma=(1, 1.5)),
+                                ]),
+                                transforms.ToTensor()
+                            ])
+                            augmented_img = augmenter(img)
+                            augmented_img = (augmented_img.squeeze(0).numpy() * 255).astype(np.uint8)
+                            new_segment_data.append((proj_id, augmented_img, lbl, extra))
+                    new_pt_data.append(new_segment_data)
+                new_patient_data[i].pt_data = new_pt_data
+            self.patient_data = new_patient_data
 
         else:
             cropping_ref = pd.read_csv(dataset_path + "pooled_cropping_ref.csv")
@@ -707,7 +744,7 @@ if __name__ == "__main__":
     # dataset1.count_data()
 
     # Load an already split datasets
-    dataset_name1 = "cropped_xray_dataset_validation"
+    dataset_name1 = "cropped_xray_dataset_training"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
                                         selected_projection=None)
 
@@ -719,9 +756,8 @@ if __name__ == "__main__":
     # dataset1.show_patient(pt_id=pt_id1)
 
     # Extend training set
-    only_extra1 = True
-    extra_dataset_types1 = [ExtraDatasetType.DD]
-    # extra_dataset_types1 = [ExtraDatasetType.CROPPED]
+    only_extra1 = False
+    extra_dataset_types1 = [ExtraDatasetType.AUGMENT]
     for extra_dataset_type1 in extra_dataset_types1:
         print("Processing", extra_dataset_type1.value + "...")
         dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1)
@@ -730,18 +766,22 @@ if __name__ == "__main__":
         dataset_name1 = extra_dataset_types1[0].get_dataset_name()
         addon1 = ""
     else:
-        addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "extended_"
+        addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "augmented_" \
+            if ExtraDatasetType.AUGMENT in extra_dataset_types1 else "extended_"
     dataset1.data_dir = working_dir1 + XrayDataset.data_fold
     dataset1.results_dir = working_dir1 + XrayDataset.results_fold
     dataset1.preliminary_dir = dataset1.results_dir + XrayDataset.preliminary_fold
     dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
-    addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Extended"
+    addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Augmented" \
+        if ExtraDatasetType.AUGMENT in extra_dataset_types1 else "Extended"
     print(addon2, "dataset:")
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
 
     is_cropped1 = ExtraDatasetType.CROPPED in extra_dataset_types1
+    is_augmented1 = ExtraDatasetType.AUGMENT in extra_dataset_types1
     is_extra1 = not is_cropped1
-    dataset1.count_data(is_extra=is_extra1, is_cropped=is_cropped1, only_extra_name=dataset_name1 if only_extra1 else None)
+    dataset1.count_data(is_extra=is_extra1, is_cropped=is_cropped1, only_extra_name=dataset_name1 if only_extra1 else None,
+                        is_augmented=is_augmented1)

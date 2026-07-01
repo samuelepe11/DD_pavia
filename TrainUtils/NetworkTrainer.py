@@ -856,11 +856,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_test"
+    model_name1 = "cropped_projection_resnet50_simpler"
     net_type1 = NetType.BASE_RES_NEXT50
     epochs1 = 200
     preprocess_inputs1 = False
-    trial_n1 = None
+    trial_n1 = 16
     val_epochs1 = 10
     use_cuda1 = False
     assess_calibration1 = True
@@ -873,7 +873,7 @@ if __name__ == "__main__":
     is_cropped1 = True
     weight_loss1 = False
     dynamic_under_sampling1 = True
-    transpose1 = True
+    transpose1 = False
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
@@ -904,9 +904,9 @@ if __name__ == "__main__":
     #                                zero_shot=True)
 
     # Train model
-    trainer1.train(show_epochs=True)
+    '''trainer1.train(show_epochs=True)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
+                                   assess_calibration=assess_calibration1)'''
     
     # Evaluate model
     print()

@@ -359,7 +359,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler_transpose_extendeddata"
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_augmenteddata"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
@@ -370,10 +370,13 @@ if __name__ == "__main__":
     enhance_images1 = False
     full_size1 = False
     is_cropped1 = True
+    is_extended1 = False
+    is_augmented1 = True
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="extended_" + addon + "xray_dataset_training",
+    addon1 = "augmented_" if is_augmented1 else "extended_" if is_extended1 else ""
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
@@ -387,8 +390,8 @@ if __name__ == "__main__":
     output_metric1 = "mcc"
     double_output1 = False
     search_for_untracked_models1 = False
-    weight_loss1 = True
-    dynamic_under_sampling1 = True
+    weight_loss1 = False
+    dynamic_under_sampling1 = False
     transpose1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
