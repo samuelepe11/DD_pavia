@@ -15,6 +15,9 @@ from torcheval.metrics.functional import multiclass_confusion_matrix
 from sklearn.metrics import roc_auc_score
 from pandas import DataFrame
 from functools import partial
+
+from torchvision.transforms.v2.functional import equalize
+
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
 
 from DataUtils.XrayDataset import XrayDataset
@@ -41,7 +44,7 @@ class NetworkTrainer:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs,
                  convergence_patience=5, convergence_thresh=1e-3, preprocess_inputs=False, net_params=None,
                  use_cuda=True, s3=None, n_parallel_gpu=0, projection_dataset=False, enhance_images=True, full_size=False,
-                 is_cropped=False, weight_loss=False, dynamic_under_sampling=False, transpose=False):
+                 is_cropped=False, weight_loss=False, dynamic_under_sampling=False, transpose=False, equalize_images=False):
         # Initialize attributes
         self.model_name = model_name
         self.working_dir = working_dir
@@ -130,6 +133,7 @@ class NetworkTrainer:
         self.dynamic_under_sampling = dynamic_under_sampling
         self.weights_loss = weight_loss
         self.transpose = transpose
+        self.equalize_images = equalize_images
         if not weight_loss or dynamic_under_sampling:
             self.criterion = nn.BCELoss()
         else:
@@ -497,13 +501,15 @@ class NetworkTrainer:
         weight_loss = False if not hasattr(self, "weight_loss") else self.weights_loss
         dynamic_under_sampling = False if hasattr(self, "dynamic_under_sampling") else self.dynamic_under_sampling
         transpose = False if not hasattr(self, "transpose") else self.transpose
+        equalize_images = False if not hasattr(self, "equalize_images") else self.equalize_images
         torch.save({"net_type": self.net_type, "epochs": self.epochs, "val_epochs": self.val_epochs,
                     "preprocess_inputs": self.preprocess_inputs, "net_params": net_params,
                     "model_state_dict": self.net.state_dict(), "train_losses": self.train_losses,
                     "val_losses": self.val_losses, "val_eval_epochs": self.val_eval_epochs,
                     "enhance_images": self.enhance_images,
                     "optimizer_pretrain_state_dict": optimizer.state_dict(), "weight_loss": weight_loss,
-                    "dynamic_under_sampling": dynamic_under_sampling, "transpose": transpose}, filepath)
+                    "dynamic_under_sampling": dynamic_under_sampling, "transpose": transpose,
+                    "equalize_images": equalize_images}, filepath)
 
         print("'" + self.model_name + "' has been successfully saved!... train loss: " +
               str(np.round(self.train_losses[0], 4)) + " -> " + str(np.round(self.train_losses[-1], 4)))
@@ -617,6 +623,18 @@ class NetworkTrainer:
                     projection = projections[j]
                     projection = self.preprocessor.preprocess(img=projection, segm=extra[1], downsampling_iterates=0,
                                                               show=False)
+                    temp.append(projection)
+                projections = temp
+            if self.equalize_images:
+                temp = []
+                for projection in projections:
+                    projection = projection.astype(np.float32)
+                    projection /= 255
+                    low, hi = np.percentile(projection, [1, 99])
+                    projection = np.clip(projection, low, hi)
+                    projection = (projection - low) / (hi - low + 1e-6)
+                    projection *= 255
+                    projection = projection.astype(np.uint8)
                     temp.append(projection)
                 projections = temp
             temp = [torch.tensor(projection, dtype=torch.float32) for projection in projections]
@@ -787,6 +805,7 @@ class NetworkTrainer:
         weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
         dynamic_under_sampling = False if not "dynamic_under_sampling" in checkpoint.keys() else checkpoint["dynamic_under_sampling"]
         transpose = False if not "transpose" in checkpoint.keys() else checkpoint["transpose"]
+        equalize_images = False if not "equalize_images" in checkpoint.keys() else checkpoint["equalize_images"]
         network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
                                          val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
                                          epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
@@ -794,7 +813,7 @@ class NetworkTrainer:
                                          net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
                                          projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
                                          is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling,
-                                         transpose=transpose)
+                                         transpose=transpose, equalize_images=equalize_images)
         network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
 
         if batch_size is not None:
@@ -874,10 +893,11 @@ if __name__ == "__main__":
     weight_loss1 = False
     dynamic_under_sampling1 = True
     transpose1 = False
+    equalize_images1 = True
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
-    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
+    train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                            selected_segments=selected_segments1,
                                            selected_projection=selected_projection1)
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
@@ -897,7 +917,7 @@ if __name__ == "__main__":
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
                               use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
                               full_size=full_size1, is_cropped=is_cropped1, weight_loss=weight_loss1,
-                              dynamic_under_sampling=dynamic_under_sampling1)
+                              dynamic_under_sampling=dynamic_under_sampling1, equalize_images=equalize_images1)
 
     # Test zero-shot Bicocca model
     # trainer1.summarize_performance(show_test=False, show_process=False, show_cm=False, assess_calibration=False,

@@ -7,7 +7,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import random
-import copy
 from torch.utils.data import Dataset
 from datetime import datetime
 from torchvision import transforms
@@ -146,7 +145,16 @@ class XrayDataset(Dataset):
         if not flag:
             print("Patient", pt_id, "not found...")
 
-    def count_data(self, is_extra=False, is_cropped=False, only_extra_name=None, is_augmented=False):
+    def count_data(self, extra_dataset_types=None, only_extra_name=None):
+        if extra_dataset_types is not None:
+            is_cropped = ExtraDatasetType.CROPPED in extra_dataset_types
+            is_augmented = ExtraDatasetType.AUGMENT in extra_dataset_types
+            is_extra = not is_cropped
+        else:
+            is_cropped = False
+            is_augmented = False
+            is_extra = False
+
         # Define directory for preliminary evaluation
         if self.set_type is None:
             self.preliminary_dir += "pooled/"
@@ -780,8 +788,4 @@ if __name__ == "__main__":
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
 
-    is_cropped1 = ExtraDatasetType.CROPPED in extra_dataset_types1
-    is_augmented1 = ExtraDatasetType.AUGMENT in extra_dataset_types1
-    is_extra1 = not is_cropped1
-    dataset1.count_data(is_extra=is_extra1, is_cropped=is_cropped1, only_extra_name=dataset_name1 if only_extra1 else None,
-                        is_augmented=is_augmented1)
+    dataset1.count_data(extra_dataset_types=extra_dataset_types1, only_extra_name=dataset_name1 if only_extra1 else None)

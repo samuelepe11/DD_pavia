@@ -392,7 +392,7 @@ if __name__ == "__main__":
     search_for_untracked_models1 = False
     weight_loss1 = False
     dynamic_under_sampling1 = False
-    transpose1 = True
+    transpose1 = False
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
