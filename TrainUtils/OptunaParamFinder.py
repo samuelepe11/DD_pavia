@@ -23,7 +23,7 @@ class OptunaParamFinder:
     def __init__(self, model_name, working_dir, train_data, val_data, test_data, net_type, epochs, val_epochs, use_cuda,
                  n_trials, s3=None, n_parallel_gpu=0, projection_dataset=False, output_metric="f1", double_output=False,
                  search_for_untracked_models=False, preprocess_inputs=True, enhance_images=True, full_size=True, direction="maximize",
-                 is_pretrain=False, is_cropped=False, weight_loss=False, dynamic_under_sampling=False, transpose=False):
+                 is_pretrain=False, is_cropped=False, weight_loss=False, dynamic_under_sampling=False, transpose=False, equalize_images=False):
         self.model_name = model_name
         self.working_dir = working_dir
         self.train_data = train_data
@@ -41,6 +41,7 @@ class OptunaParamFinder:
         self.weight_loss = weight_loss
         self.dynamic_under_sampling = dynamic_under_sampling
         self.transpose = transpose
+        self.equalize_images = equalize_images
 
         self.output_metric = output_metric
         self.double_output = double_output
@@ -190,7 +191,8 @@ class OptunaParamFinder:
                                      preprocess_inputs=self.preprocess_inputs,
                                      enhance_images=self.enhance_images, full_size=self.full_size,
                                      is_cropped=self.is_cropped, weight_loss=self.weight_loss,
-                                     dynamic_under_sampling=self.dynamic_under_sampling, transpose=self.transpose)
+                                     dynamic_under_sampling=self.dynamic_under_sampling, transpose=self.transpose,
+                                     equalize_images=self.equalize_images)
             val_metric = trainer.train(show_epochs=False, trial_n=self.counter-1, trial=trial,
                                        output_metric=self.output_metric, double_output=self.double_output)
             print("Value:", val_metric)
@@ -359,11 +361,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler_transpose_augmenteddata"
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize_400"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
-    epochs1 = 200
+    epochs1 = 400
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
@@ -371,7 +373,7 @@ if __name__ == "__main__":
     full_size1 = False
     is_cropped1 = True
     is_extended1 = False
-    is_augmented1 = True
+    is_augmented1 = False
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
@@ -393,6 +395,7 @@ if __name__ == "__main__":
     weight_loss1 = False
     dynamic_under_sampling1 = False
     transpose1 = False
+    equalize_images1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                                 val_epochs=val_epochs1, use_cuda=use_cuda1, n_trials=n_trials1,
@@ -400,7 +403,7 @@ if __name__ == "__main__":
                                 double_output=double_output1, search_for_untracked_models=search_for_untracked_models1,
                                 enhance_images=enhance_images1, full_size=full_size1, is_cropped=is_cropped1,
                                 weight_loss=weight_loss1, dynamic_under_sampling=dynamic_under_sampling1,
-                                transpose=transpose1)
+                                transpose=transpose1, equalize_images=equalize_images1)
     # Run search
     optuna1.initialize_study()
 
