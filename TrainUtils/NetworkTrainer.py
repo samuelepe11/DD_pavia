@@ -8,17 +8,24 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 import optuna
+import copy
+import io
+import gc
+import json
+import pandas as pd
 from sqlalchemy.testing import is_not_
 from tensorflow.python.ops.linalg.linalg_impl import transpose
 from torch.utils.data import DataLoader, Subset
 from torcheval.metrics.functional import multiclass_confusion_matrix
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, matthews_corrcoef
 from pandas import DataFrame
 from functools import partial
-
 from torchvision.transforms.v2.functional import equalize
-
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
+from contextlib import redirect_stdout
+from cleanlab import Datalab
+from sklearn.model_selection import StratifiedGroupKFold
+from enum import Enum
 
 from DataUtils.XrayDataset import XrayDataset
 from DataUtils.XrayProjectionDataset import XrayProjectionDataset
@@ -81,6 +88,9 @@ class NetworkTrainer:
         else:
             self.net = None
             print("The selected network is not available.")
+
+        # Define initial state for cleanlab
+        self._cleanlab_initial_state = copy.deepcopy(self.net.state_dict())
 
         # Define training parameters
         self.classes = XrayDataset.classes
@@ -181,12 +191,13 @@ class NetworkTrainer:
             print("\nStarting the training phase...")
 
         if self.dynamic_under_sampling:
-            labels = []
+            train_dataset_labels = self.get_dataset_binary_labels(self.train_data)
+            '''labels = []
             for item, _ in self.train_loader:
                 labels += [int(label != "") for label in item[2]]
             labels = np.array(labels)
             pos_idx = np.where(labels == 1)[0]
-            neg_idx = np.where(labels == 0)[0]
+            neg_idx = np.where(labels == 0)[0]'''
 
         for epoch in range(self.epochs):
             if not self.n_parallel_gpu:
@@ -194,7 +205,10 @@ class NetworkTrainer:
             else:
                 net.train()
 
-            loader = self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(pos_idx, neg_idx)
+            #loader = self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(pos_idx, neg_idx)
+            loader = (self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(dataset=self.train_data,
+                                                                                                            labels=train_dataset_labels,
+                                                                                                            neg_proportion=2))
             train_loss = 0
             train_acc = 0
             for batch in loader:
@@ -648,12 +662,28 @@ class NetworkTrainer:
         input = torch.from_numpy(input)
         return input
 
-    def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=2):
+    '''def create_balanced_loader(self, pos_idx, neg_idx, neg_proportion=2):
         sampled_neg_idx = np.random.choice(neg_idx, size=neg_proportion*len(pos_idx), replace=False)
         epoch_indices = np.concatenate([pos_idx, sampled_neg_idx])
         np.random.shuffle(epoch_indices)
         epoch_subset = Subset(self.train_data, epoch_indices)
         loader, _ = self.load_data(epoch_subset, shuffle=True)
+        return loader'''
+
+    def create_balanced_loader(self, dataset, labels, neg_proportion=2):
+        labels = np.asarray(labels, dtype=np.int64)
+        positive_indices = np.flatnonzero(labels == 1)
+        negative_indices = np.flatnonzero(labels == 0)
+        requested_negatives = int(np.ceil(neg_proportion * len(positive_indices)))
+        number_to_sample = min(requested_negatives, len(negative_indices))
+        if number_to_sample == len(negative_indices):
+            sampled_negative_indices = negative_indices.copy()
+        else:
+            sampled_negative_indices = np.random.choice(negative_indices, size=number_to_sample, replace=False)
+        epoch_indices = np.concatenate([positive_indices, sampled_negative_indices])
+        np.random.shuffle(epoch_indices)
+        epoch_subset = Subset(dataset, epoch_indices.tolist())
+        loader, _ = self.load_data(epoch_subset, shuffle=False)
         return loader
 
     @staticmethod
@@ -789,6 +819,528 @@ class NetworkTrainer:
         plt.savefig(imgpath, dpi=300, bbox_inches="tight")
         plt.close()
 
+    def clean_labels(self, records, k=5, clean_epochs=20, seed=111099, neg_proportion=2, output_dir=None, show=False,
+                     feature_layer_ind=-1):
+        # Check inputs
+        records_df = DataFrame(records).reset_index(drop=True)
+        if not self.projection_dataset:
+            raise ValueError("The supplied records are projection-level records. Initialize NetworkTrainer with "
+                             "projection_dataset=True.")
+        if len(records_df) != len(self.train_data):
+            raise ValueError("Record/dataset length mismatch: " + f"{len(records_df)} records versus " +
+                             f"{len(self.train_data)} items in self.train_data. The records must correspond exactly to "
+                             f"XrayProjectionDataset.")
+        labels = records_df["label"].to_numpy(dtype=np.int64)
+        patient_ids = records_df["patient_id"].to_numpy()
+        if k < 2:
+            raise ValueError("k must be at least 2.")
+        n_patients = len(np.unique(patient_ids))
+        if k > n_patients:
+            raise ValueError(f"k={k}, but the dataset contains only {n_patients} patients.")
+
+        # Each class should occur in at least K different patients.
+        for class_id in [0, 1]:
+            class_patient_count = len(np.unique(patient_ids[labels == class_id]))
+            if class_patient_count < k:
+                raise ValueError(f"Class {class_id} occurs in only " + f"{class_patient_count} different patients, but k={k}. "
+                    "Reduce k or add more patients containing this class.")
+
+        # Create an optimizer for a new fold model
+        def create_optimizer(model):
+            try:
+                last_parameters = [parameter for name, parameter in model.named_parameters() if "resnet.7" in name]
+                other_parameters = [parameter for name, parameter in model.named_parameters() if "resnet.7" not in name]
+                parameter_groups = [{"params": last_parameters, "lr": (self.net_params["lr_last"] / self.net_params["lr_second_last_factor"])},
+                                    {"params": other_parameters, "lr": self.net_params["lr_last"]}]
+            except KeyError:
+                parameter_groups = [{"params": model.parameters(), "lr": self.net_params["lr"]}]
+            optimizer_class = getattr(torch.optim, self.net_params["optimizer"])
+            return optimizer_class(parameter_groups)
+
+        # Restore a fresh model for each fold
+        def create_fresh_model():
+            if self.n_parallel_gpu != 0:
+                raise ValueError("The code is not compatible with multi-GPU training for cleanlab. Set n_parallel_gpu=0 "
+                                 "to use a single GPU or CPU.")
+            model = copy.deepcopy(self.net)
+            model.load_state_dict(copy.deepcopy(self._cleanlab_initial_state))
+            model.set_cuda(cuda=self.use_cuda)
+            return model
+
+        # Run the same preprocessing and model forward pass
+        def forward_batch(model, batch, set_type):
+            item, extra = batch
+            projection_type_batch, projection_batch, _ = item
+            inputs = self.preprocess_fn(projection_batch, projection_type_batch, extra, set_type)
+            inputs = inputs.to(self.device)
+            batch_labels = (item[-1] != "").astype(np.int64)
+            batch_labels = torch.as_tensor(batch_labels, dtype=torch.float32, device=self.device).unsqueeze(1)
+            outputs = model(inputs, extra[1], projection_type_batch, self.n_parallel_gpu)
+            if outputs.ndim == 1:
+                outputs = outputs.unsqueeze(1)
+            return outputs, batch_labels
+        uses_logits = (self.weights_loss and not self.dynamic_under_sampling)
+
+        def evaluate_fold_model(model, loader, criterion):
+            model.set_training(False)
+            all_probabilities = []
+            all_labels = []
+            total_loss = 0.0
+            total_examples = 0
+            with torch.no_grad():
+                for batch in loader:
+                    outputs, batch_labels = forward_batch(model, batch, SetType.VAL)
+                    if uses_logits:
+                        probabilities = torch.sigmoid(outputs)
+                        loss = criterion(outputs, batch_labels)
+                    else:
+                        probabilities = torch.clamp(outputs, min=1e-7, max=1.0 - 1e-7)
+                        loss = criterion(probabilities, batch_labels)
+                    batch_size = batch_labels.shape[0]
+                    total_loss += loss.item() * batch_size
+                    total_examples += batch_size
+                    all_probabilities.append(probabilities.reshape(-1).cpu())
+                    all_labels.append(batch_labels.reshape(-1).cpu())
+            probabilities = torch.cat(all_probabilities).numpy()
+            true_labels = torch.cat(all_labels).numpy().astype(np.int64)
+            predictions = (probabilities >= 0.5).astype(np.int64)
+            mean_loss = total_loss / total_examples
+            mcc = float(matthews_corrcoef(true_labels, predictions))
+            return mean_loss, mcc, probabilities, true_labels
+
+        # Create patient-level folds
+        splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+        splits = splitter.split(X=np.zeros(len(labels)), y=labels, groups=patient_ids)
+        oof_pred_probs = np.full(shape=(len(labels), 2), fill_value=np.nan, dtype=np.float32)
+
+        # Train model for each fold
+        for fold_idx, (train_indices, held_out_indices) in enumerate(splits, start=1):
+            NetworkTrainer.set_seed(seed + fold_idx)
+            train_indices = np.asarray(train_indices, dtype=np.int64)
+            held_out_indices = np.asarray(held_out_indices, dtype=np.int64)
+            train_labels = labels[train_indices]
+            held_out_labels = labels[held_out_indices]
+            if show:
+                print()
+                print(f"Cleanlab fold {fold_idx}/{k}")
+                print(f"  Train: {len(train_indices)} projections, " + f"{len(np.unique(patient_ids[train_indices]))} patients, "
+                      + f"{np.sum(train_labels == 1)} positive")
+                print(f"  Held out: {len(held_out_indices)} projections, " + f"{len(np.unique(patient_ids[held_out_indices]))} patients, "
+                      + f"{np.sum(held_out_labels == 1)} positive")
+            train_subset = Subset(self.train_data, train_indices.tolist())
+            held_out_subset = Subset(self.train_data, held_out_indices.tolist())
+            model = create_fresh_model()
+            optimizer = create_optimizer(model)
+            if uses_logits:
+                n_positive = int(np.sum(train_labels == 1))
+                n_negative = int(np.sum(train_labels == 0))
+                if n_positive == 0:
+                    raise ValueError(f"Fold {fold_idx} has no positive training examples.")
+                pos_weight = torch.tensor([n_negative / n_positive], dtype=torch.float32, device=self.device)
+                criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            else:
+                criterion = nn.BCELoss().to(self.device)
+            standard_train_loader, _ = self.load_data(train_subset, shuffle=True)
+            for epoch in range(clean_epochs):
+                model.set_training(True)
+                if self.dynamic_under_sampling:
+                    positive_local_indices = np.flatnonzero(train_labels == 1)
+                    negative_local_indices = np.flatnonzero(train_labels == 0)
+                    if len(positive_local_indices) == 0:
+                        raise ValueError(f"Fold {fold_idx} contains no positive examples.")
+                    requested_negatives = (neg_proportion * len(positive_local_indices))
+                    n_sampled_negatives = min(requested_negatives, len(negative_local_indices))
+                    sampled_negative_indices = np.random.choice(negative_local_indices, size=n_sampled_negatives, replace=False)
+                    epoch_local_indices = np.concatenate([positive_local_indices, sampled_negative_indices])
+                    np.random.shuffle(epoch_local_indices)
+                    epoch_dataset = Subset(train_subset, epoch_local_indices.tolist())
+                    epoch_loader, _ = self.load_data(epoch_dataset, shuffle=True)
+                else:
+                    epoch_loader = standard_train_loader
+                running_loss = 0.0
+                for batch in epoch_loader:
+                    optimizer.zero_grad(set_to_none=True)
+                    outputs, batch_labels = forward_batch(model, batch, SetType.TRAIN)
+                    if uses_logits:
+                        loss = criterion(outputs, batch_labels)
+                    else:
+                        probabilities = torch.clamp(outputs, min=1e-7, max=1.0 - 1e-7)
+                        loss = criterion(probabilities, batch_labels)
+                    loss.backward()
+                    optimizer.step()
+                    running_loss += loss.detach().item()
+                if show and (epoch == 0 or epoch == clean_epochs - 1 or (epoch + 1) % 10 == 0):
+                    mean_loss = running_loss / len(epoch_loader)
+                    print(f"  Epoch {epoch + 1}/{clean_epochs}: " + f"loss={mean_loss:.5f}")
+
+            train_eval_loader, _ = self.load_data(train_subset, shuffle=False)
+            train_eval_loss, train_mcc, _, train_eval_labels = (evaluate_fold_model(model, train_eval_loader, criterion))
+            held_out_loader, _ = self.load_data(held_out_subset, shuffle=False)
+            held_out_loss, held_out_mcc, fold_positive_probabilities, evaluated_held_out_labels = evaluate_fold_model(model,
+                                                                                                                      held_out_loader,
+                                                                                                                      criterion)
+            if not np.array_equal(evaluated_held_out_labels, held_out_labels):
+                raise RuntimeError("Held-out labels are not aligned with predictions.")
+            if show:
+                print(f"  Fold {fold_idx} complete:\n" + f"    train loss    = {train_eval_loss:.5f}\n" +
+                      f"    train MCC     = {train_mcc:.4f}\n" + f"    held-out loss = {held_out_loss:.5f}\n" +
+                      f"    held-out MCC  = {held_out_mcc:.4f}")
+
+            # Cleanlab probabilities
+            oof_pred_probs[held_out_indices, 1] = (fold_positive_probabilities)
+            oof_pred_probs[held_out_indices, 0] = (1.0 - fold_positive_probabilities)
+            del model
+            del optimizer
+            del criterion
+            if self.use_cuda:
+                torch.cuda.empty_cache()
+
+        # Validate the complete OOF probability matrix
+        if not np.all(np.isfinite(oof_pred_probs)):
+            missing_indices = np.flatnonzero(~np.isfinite(oof_pred_probs).all(axis=1))
+            raise RuntimeError("Some examples did not receive an out-of-fold prediction: " + f"{missing_indices[:20].tolist()}")
+        if not np.allclose(oof_pred_probs.sum(axis=1), 1.0, atol=1e-5):
+            raise RuntimeError("Each row of oof_pred_probs must sum to one.")
+
+        # Run Cleanlab
+        if output_dir is None:
+            output_dir = os.path.join(self.results_dir, "cleanlab")
+        lab, full_report, features, issue_summary = (self.run_cleanlab_full_audit(records_df=records_df, labels=labels,
+                                                                                  oof_pred_probs=oof_pred_probs,
+                                                                                  output_dir=output_dir,
+                                                                                  feature_layer_ind=feature_layer_ind,
+                                                                                  show=show))
+        return lab, full_report, oof_pred_probs, features, issue_summary,
+
+
+        '''cleanlab_data = records_df.drop(columns=["image"], errors="ignore").copy()
+        cleanlab_data.insert(0, "dataset_index", np.arange(len(cleanlab_data)))
+        cleanlab_data["projection_id"] = cleanlab_data["projection_id"].map(
+            lambda x: x.value if isinstance(x, ProjectionType) else x)
+        lab = Datalab(data=cleanlab_data, label_name="label")
+        lab.find_issues(pred_probs=oof_pred_probs, issue_types={"label": {}})
+        label_issues = (lab.get_issues("label").reset_index(drop=True))
+        label_report = DataFrame({"dataset_index": np.arange(len(records_df)), "patient_id": records_df["patient_id"],
+                                  "segment_idx": records_df["segment_idx"], "projection_idx": records_df["projection_idx"],
+                                  "projection_id": records_df["projection_id"], "original_label": labels,
+                                  "probability_no_fracture": oof_pred_probs[:, 0], "probability_fracture": oof_pred_probs[:, 1]})
+        label_report = DataFrame(np.concatenate([label_report.to_numpy(), label_issues.to_numpy()], axis=1),
+                                 columns=(list(label_report.columns) + list(label_issues.columns)))
+        label_report["dataset_index"] = (label_report["dataset_index"].astype(int))
+        label_report["segment_idx"] = (label_report["segment_idx"].astype(int))
+        label_report["projection_idx"] = (label_report["projection_idx"].astype(int))
+        label_report["original_label"] = (label_report["original_label"].astype(int))
+        if "is_label_issue" in label_report.columns:
+            label_report["is_label_issue"] = (label_report["is_label_issue"].astype(bool))
+        label_report = label_report.sort_values(by=["is_label_issue", "label_score"], ascending=[False, True]).reset_index(drop=True)
+        if output_dir is None:
+            output_dir = os.path.join(self.results_dir, "cleanlab")
+        os.makedirs(output_dir, exist_ok=True)
+        report_csv_path = os.path.join(output_dir, "cleanlab_label_report.csv")
+        flagged_csv_path = os.path.join(output_dir, "cleanlab_flagged_labels.csv")
+        probability_path = os.path.join(output_dir, "cleanlab_oof_pred_probs.npy")
+        text_report_path = os.path.join(output_dir, "cleanlab_report.txt")
+        label_report.to_csv(report_csv_path, index=False)
+        label_report.query("is_label_issue").to_csv(flagged_csv_path, index=False)
+        np.save(probability_path, oof_pred_probs)
+        report_buffer = io.StringIO()
+        with redirect_stdout(report_buffer):
+            lab.report()
+        report_text = report_buffer.getvalue()
+        print()
+        print(report_text)
+        with open(text_report_path, "w", encoding="utf-8") as report_file:
+            report_file.write(report_text)
+        print("Cleanlab results saved in:", output_dir)
+        print("Detailed report:", report_csv_path)
+        print("Flagged labels:", flagged_csv_path)
+        print("Text report:", text_report_path)
+        return lab, label_report, oof_pred_probs'''
+
+    def extract_features_from_loaded_model(self, dataset=None, feature_layer_ind=-1, show=False):
+        if dataset is None:
+            dataset = self.train_data
+        loaded_model = self.net
+        was_training = bool(getattr(loaded_model, "training", False))
+        if hasattr(loaded_model, "set_cuda"):
+            loaded_model.set_cuda(cuda=self.use_cuda)
+        else:
+            loaded_model.to(self.device)
+        if hasattr(loaded_model, "set_training"):
+            loaded_model.set_training(False)
+        else:
+            loaded_model.eval()
+        named_modules = dict(loaded_model.named_modules())
+        linear_layers = [(name, module) for name, module in loaded_model.named_modules() if isinstance(module, nn.Linear)]
+        if show:
+            print("Available Linear layers in the loaded model:")
+            for name, layer in linear_layers:
+                print(f"  {name}: {layer.in_features} -> {layer.out_features}")
+            selected_layer = list(named_modules.values())[feature_layer_ind]
+            selected_name = list(named_modules.keys())[feature_layer_ind]
+        if show:
+            print(f"Extracting features from the INPUT of layer: {selected_name}")
+        loader, _ = self.load_data(dataset, shuffle=False)
+        all_features = []
+        captured_for_batch = []
+
+        def capture_layer_input(module, inputs):
+            value = inputs[0]
+            if isinstance(value, (tuple, list)):
+                value = value[0]
+            if not torch.is_tensor(value):
+                raise TypeError(f"The input of layer '{selected_name}' is not a tensor: {type(value)}")
+            if value.ndim > 2:
+                value = torch.flatten(value, start_dim=1)
+            captured_for_batch.append(value.detach())
+        hook = selected_layer.register_forward_pre_hook(capture_layer_input)
+        try:
+            with torch.no_grad():
+                for batch in loader:
+                    item, extra = batch
+                    projection_type_batch, projection_batch, _ = item
+                    inputs = self.preprocess_fn(projection_batch, projection_type_batch, extra, SetType.VAL).to(self.device)
+                    captured_for_batch.clear()
+                    _ = loaded_model(inputs, extra[1], projection_type_batch, 0)
+                    if len(captured_for_batch) != 1:
+                        raise RuntimeError(f"Layer '{selected_name}' was triggered " +
+                                           f"{len(captured_for_batch)} times for one batch. " +
+                                           "Specify a different feature_layer_name or implement an explicit "
+                                           "forward_features() method.")
+                    batch_features = captured_for_batch[0]
+                    if batch_features.shape[0] != inputs.shape[0]:
+                        raise RuntimeError("Feature batch size does not match input batch size: " +
+                                           f"{batch_features.shape[0]} vs {inputs.shape[0]}.")
+                    all_features.append(batch_features.cpu())
+        finally:
+            hook.remove()
+            if hasattr(loaded_model, "set_training"):
+                loaded_model.set_training(was_training)
+            elif was_training:
+                loaded_model.train()
+            else:
+                loaded_model.eval()
+        features = torch.cat(all_features, dim=0).numpy().astype(np.float32, copy=False)
+        if features.ndim != 2:
+            raise RuntimeError(f"Expected a 2D feature matrix, got {features.shape}.")
+        if features.shape[0] != len(dataset):
+            raise RuntimeError(f"Extracted {features.shape[0]} feature vectors for {len(dataset)} examples.")
+        if not np.isfinite(features).all():
+            raise RuntimeError("Extracted features contain NaN or infinite values.")
+        if show:
+            print("Loaded-model feature matrix:", features.shape)
+            print("Feature memory: %.2f MB" % (features.nbytes / 1024 ** 2))
+        return features, selected_name
+
+    def run_cleanlab_full_audit(self, records_df, labels, oof_pred_probs, output_dir, feature_layer_ind=-1,
+                                show=False):
+        requested_issues = ["null", "label", "outlier", "near_duplicate", "non_iid", "class_imbalance",
+                            "underperforming_group", "data_valuation"]
+        os.makedirs(output_dir, exist_ok=True)
+        issues_dir = os.path.join(output_dir, "issues")
+        os.makedirs(issues_dir, exist_ok=True)
+        labels = np.asarray(labels, dtype=np.int64)
+        oof_pred_probs = np.asarray(oof_pred_probs, dtype=np.float32)
+        if not np.isfinite(oof_pred_probs).all():
+            raise ValueError("oof_pred_probs contains NaN or infinite values.")
+        if not np.allclose(oof_pred_probs.sum(axis=1), 1.0, atol=1e-5):
+            raise ValueError("Every row of oof_pred_probs must sum to one.")
+        gc.collect()
+        if self.use_cuda:
+            torch.cuda.empty_cache()
+        features, selected_feature_layer = self.extract_features_from_loaded_model(dataset=self.train_data,
+                                                                                   feature_layer_ind=feature_layer_ind,
+                                                                                   show=show)
+        if features.shape[0] != len(labels):
+            raise RuntimeError(f"Feature/label length mismatch: {features.shape[0]} vs {len(labels)}.")
+        np.save(os.path.join(output_dir, "cleanlab_original_model_features.npy"), features)
+        np.save(os.path.join(output_dir, "cleanlab_oof_pred_probs.npy"), oof_pred_probs)
+        cleanlab_data = DataFrame({"label": labels.astype(np.int64)})
+        lab = Datalab(data=cleanlab_data, label_name="label")
+
+        # Run incrementally
+        check_calls = {"null": {"features": features},
+                       "label": {"pred_probs": oof_pred_probs},
+                       "outlier": {"features": features},
+                       "near_duplicate": {"features": features},
+                       "non_iid": {"features": features},
+                       "class_imbalance": {},
+                       "underperforming_group": {"pred_probs": oof_pred_probs, "features": features},
+                       "data_valuation": {"features": features}}
+        issue_frames = {}
+        summary_rows = []
+        failed_checks = {}
+        interpretations = {
+            "label": ("Possible incorrect annotation. Verify clinically; correct the label or remove only when the case"
+                      " cannot be reliably relabeled."),
+            "outlier": ("Atypical in the loaded model's feature space. Inspect for bad crop, artifact, domain shift, "
+                        "or a rare but valid clinical case."),
+            "near_duplicate": ("Very similar to another example. Review duplicate sets and prevent patient/image "
+                               "leakage across train/validation/test splits."),
+            "non_iid": ("Dataset-level ordering/dependence signal. Do not delete individual rows solely from this "
+                        "check; investigate ordering and patient-level splitting."),
+            "class_imbalance": ("Dataset/group-level class imbalance. Do not delete minority-class rows; consider "
+                                "weighting, sampling, or collecting more minority data."),
+            "underperforming_group": ("A feature-space subgroup on which OOF predictions perform poorly. Investigate "
+                                      "the subgroup rather than automatically deleting it."),
+            "data_valuation": ("Low estimated KNN-Shapley training value. Use as a review signal only; rare valid cases"
+                               " can still be important."),
+            "null": ("Missing/invalid feature representation. Re-extract or fix the example; remove only if the "
+                     "underlying image is unusable.")}
+        for issue_name in requested_issues:
+            if show:
+                print("\n" + "=" * 70)
+                print("Running Cleanlab issue:", issue_name)
+                print("=" * 70)
+            try:
+                lab.find_issues(issue_types={issue_name: {}}, **check_calls[issue_name])
+                issue_df = lab.get_issues(issue_name).reset_index(drop=True).copy()
+                issue_frames[issue_name] = issue_df
+                issue_flag_column = f"is_{issue_name}_issue"
+                number_flagged = (int(issue_df[issue_flag_column].fillna(False).astype(bool).sum())
+                                  if issue_flag_column in issue_df.columns else np.nan)
+                issue_summary = lab.get_issue_summary(issue_name)
+                overall_score = (float(issue_summary["score"].iloc[0]) if "score" in issue_summary.columns and
+                                                                          len(issue_summary) > 0 else np.nan)
+                summary_rows.append({"issue_type": issue_name, "status": "completed", "number_flagged": number_flagged,
+                                     "overall_quality_score": overall_score, "interpretation": interpretations[issue_name],
+                                     "error": ""})
+                issue_df.to_csv(os.path.join(issues_dir, f"{issue_name}_all_examples.csv"), index=False)
+                if issue_flag_column in issue_df.columns:
+                    (issue_df.loc[issue_df[issue_flag_column].fillna(False).astype(bool)]
+                     .to_csv(os.path.join(issues_dir, f"{issue_name}_flagged_examples.csv"), index=False))
+            except Exception as exc:
+                failed_checks[issue_name] = repr(exc)
+                summary_rows.append({"issue_type": issue_name, "status": "failed", "number_flagged": np.nan,
+                                     "overall_quality_score": np.nan, "interpretation": interpretations[issue_name],
+                                     "error": repr(exc)})
+                print(f"Cleanlab check '{issue_name}' failed: {exc}")
+            gc.collect()
+
+        def readable_value(value):
+            if isinstance(value, Enum):
+                return value.value
+            if isinstance(value, np.generic):
+                return value.item()
+            if isinstance(value, (list, tuple, dict, np.ndarray)):
+                return json.dumps(np.asarray(value).tolist() if isinstance(value, np.ndarray) else value)
+            return value
+
+        metadata_columns = ["patient_id", "segment_idx", "projection_idx", "projection_id"]
+        metadata_columns = [column for column in metadata_columns if column in records_df.columns]
+        review_table = records_df[metadata_columns].reset_index(drop=True).copy()
+        review_table.insert(0, "dataset_index", np.arange(len(labels), dtype=np.int64))
+        for column in review_table.columns:
+            review_table[column] = review_table[column].map(readable_value)
+        review_table["original_label"] = labels
+        review_table["label_name"] = DataFrame({"label": labels})["label"].map({0: "no_fracture", 1: "fracture"})
+        review_table["probability_no_fracture"] = oof_pred_probs[:, 0]
+        review_table["probability_fracture"] = oof_pred_probs[:, 1]
+        review_table["oof_predicted_label"] = np.argmax(oof_pred_probs, axis=1)
+        review_table["oof_prediction_correct"] = (review_table["oof_predicted_label"].to_numpy() == labels)
+        review_table["probability_assigned_to_original_label"] = oof_pred_probs[np.arange(len(labels)), labels]
+        review_table["oof_prediction_confidence"] = np.max(oof_pred_probs, axis=1)
+        for issue_name, issue_df in issue_frames.items():
+            if len(issue_df) != len(review_table):
+                raise RuntimeError(f"Issue '{issue_name}' returned {len(issue_df)} rows for {len(review_table)} examples.")
+            for column in issue_df.columns:
+                values = issue_df[column].map(readable_value)
+                review_table[f"{issue_name}_{column}"] = values.to_numpy()
+
+        def flag_value(row, issue_name):
+            column = f"{issue_name}_is_{issue_name}_issue"
+            if column not in row.index:
+                return False
+            value = row[column]
+            return False if pd.isna(value) else bool(value)
+
+        point_issue_names = ["null", "label", "outlier", "near_duplicate", "data_valuation"]
+        point_flag_columns = [f"{name}_is_{name}_issue" for name in point_issue_names if f"{name}_is_{name}_issue" in review_table.columns]
+        if point_flag_columns:
+            review_table["pointwise_issue_count"] = (review_table[point_flag_columns].fillna(False).astype(bool).sum(axis=1))
+        else:
+            review_table["pointwise_issue_count"] = 0
+        point_score_columns = [f"{name}_{name}_score" for name in point_issue_names if f"{name}_{name}_score" in review_table.columns]
+        if point_score_columns:
+            review_table["minimum_pointwise_quality_score"] = (review_table[point_score_columns].apply(pd.to_numeric, errors="coerce").min(axis=1))
+        else:
+            review_table["minimum_pointwise_quality_score"] = np.nan
+
+        def choose_action(row):
+            has_null = flag_value(row, "null")
+            has_label = flag_value(row, "label")
+            has_outlier = flag_value(row, "outlier")
+            has_duplicate = flag_value(row, "near_duplicate")
+            has_low_value = flag_value(row, "data_valuation")
+            has_group = flag_value(row, "underperforming_group")
+            has_imbalance = flag_value(row, "class_imbalance")
+            has_non_iid = flag_value(row, "non_iid")
+            strong_disagreement = row["probability_assigned_to_original_label"] < 0.20
+            if has_null:
+                return 5, "FIX/RE-EXTRACT: invalid or missing feature vector"
+            if has_label and strong_disagreement:
+                return 5, "VERIFY LABEL URGENTLY: strong OOF disagreement"
+            if has_label:
+                return 4, "VERIFY LABEL: correct it, or remove only if unverifiable"
+            if has_duplicate:
+                return 4, "CHECK DUPLICATE SET: remove redundancy or prevent split leakage"
+            if has_outlier and has_low_value:
+                return 4, "HIGH-PRIORITY VISUAL REVIEW: atypical and low estimated value"
+            if has_outlier:
+                return 3, "VISUAL REVIEW: artifact/bad crop versus rare valid case"
+            if has_low_value:
+                return 2, "REVIEW: low estimated value alone is not enough for deletion"
+            if has_group:
+                return 2, "INVESTIGATE SUBGROUP: improve coverage/model, do not auto-delete"
+            if has_imbalance:
+                return 1, "RETAIN: minority-class flag; use weighting/sampling"
+            if has_non_iid:
+                return 1, "CHECK ORDER/SPLIT: do not delete based on this row"
+            return 0, "NO STRONG CLEANLAB REMOVAL SIGNAL"
+        actions = review_table.apply(choose_action, axis=1)
+        review_table["manual_review_priority"] = [item[0] for item in actions]
+        review_table["suggested_action"] = [item[1] for item in actions]
+        review_table = review_table.sort_values(by=["manual_review_priority", "pointwise_issue_count",
+                                                    "minimum_pointwise_quality_score",
+                                                    "probability_assigned_to_original_label"],
+                                                ascending=[False, False, True, True],
+                                                na_position="last",).reset_index(drop=True)
+        summary_table = DataFrame(summary_rows)
+        summary_table["feature_source"] = f"loaded self.net; input of layer '{selected_feature_layer}'"
+        summary_table["feature_shape"] = str(tuple(features.shape))
+        full_csv_path = os.path.join(output_dir, "cleanlab_full_manual_review.csv")
+        summary_csv_path = os.path.join(output_dir, "cleanlab_issue_summary.csv")
+        report_txt_path = os.path.join(output_dir, "cleanlab_full_report.txt")
+        review_table.to_csv(full_csv_path, index=False)
+        summary_table.to_csv(summary_csv_path, index=False)
+        report_buffer = io.StringIO()
+        with redirect_stdout(report_buffer):
+            lab.report()
+        cleanlab_report_text = report_buffer.getvalue()
+        with open(report_txt_path, "w", encoding="utf-8") as report_file:
+            report_file.write("FEATURE EXTRACTION\n")
+            report_file.write("==================\n")
+            report_file.write("Source: original/loaded self.net (not K-fold models)\n")
+            report_file.write(f"Layer input: {selected_feature_layer}\n")
+            report_file.write(f"Feature shape: {features.shape}\n\n")
+            report_file.write("CHECK EXECUTION SUMMARY\n")
+            report_file.write("=======================\n")
+            report_file.write(summary_table.to_string(index=False))
+            report_file.write("\n\nCLEANLAB REPORT\n")
+            report_file.write("===============\n")
+            report_file.write(cleanlab_report_text)
+            if failed_checks:
+                report_file.write("\n\nFAILED CHECKS\n")
+                report_file.write("=============\n")
+                for name, error in failed_checks.items():
+                    report_file.write(f"{name}: {error}\n")
+        print("\nCleanlab full audit saved in:", output_dir)
+        print("Full per-image review:", full_csv_path)
+        print("Issue summary:", summary_csv_path)
+        print("Text report:", report_txt_path)
+        print("Original-model features:", os.path.join(output_dir, "cleanlab_original_model_features.npy"))
+        return lab, review_table, features, summary_table
+
     @staticmethod
     def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
                    projection_dataset=False, s3=None, batch_size=None, is_cropped=False):
@@ -870,12 +1422,13 @@ class NetworkTrainer:
 # Main
 if __name__ == "__main__":
     # Define seed
-    NetworkTrainer.set_seed(111099)
+    seed1 = 111099
+    NetworkTrainer.set_seed(seed1)
 
     # Define variables
-    # working_dir1 = "./../../"
+    working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnet50_simpler"
+    model_name1 = "cropped_projection_resnext50_simpler"
     net_type1 = NetType.BASE_RES_NEXT50
     epochs1 = 200
     preprocess_inputs1 = False
@@ -934,6 +1487,9 @@ if __name__ == "__main__":
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1,
                                          is_cropped=is_cropped1)
-    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)
+    '''trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)'''
 
+    # Clean labels with Cleanlab
+    records = train_data1.clean_labels_input()
+    lab, review_table, oof_pred_probs, features, issue_summary = trainer1.clean_labels(records=records, k=10, clean_epochs=200, seed=seed1, show=True)

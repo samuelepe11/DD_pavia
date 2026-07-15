@@ -7,6 +7,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import torch
 from torch.utils.data import Dataset
 from datetime import datetime
 from torchvision import transforms
@@ -674,6 +675,25 @@ class XrayDataset(Dataset):
 
         return dataset
 
+    def clean_labels_input(self):
+        records = []
+        for patient in self.patient_data:
+            for segment_idx, segment in enumerate(patient.pt_data):
+                for projection_idx, projection in enumerate(segment):
+                    proj_type, image, label, _ = projection
+                    records.append({"dicom_instance": f"{patient.id:03d}" + f"{str(patient.segments[segment_idx]).lower()}",
+                                    "patient_id": patient.id, "projection_idx": projection_idx, "projection_id": proj_type, "image": image,
+                                    "label": int(label != "")})
+        labels = np.asarray([record["label"] for record in records], dtype=np.int64)
+        print("Images:", len(records))
+        print("Negative:", np.sum(labels == 0))
+        print("Positive:", np.sum(labels == 1))
+
+        # Reorder records
+        order_map = {dicom_id: position for position, dicom_id in enumerate(self.dicom_instances)}
+        ordered_records = sorted(records, key=lambda record: (order_map[record["dicom_instance"]], record["projection_idx"]))
+        return ordered_records
+
     @staticmethod
     def get_segment_name(segment):
         return XrayDataset.segment_dict[segment]
@@ -766,9 +786,9 @@ if __name__ == "__main__":
     # Extend training set
     only_extra1 = False
     extra_dataset_types1 = [ExtraDatasetType.AUGMENT]
-    for extra_dataset_type1 in extra_dataset_types1:
+    '''for extra_dataset_type1 in extra_dataset_types1:
         print("Processing", extra_dataset_type1.value + "...")
-        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1)
+        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1)'''
 
     if only_extra1:
         dataset_name1 = extra_dataset_types1[0].get_dataset_name()
@@ -779,13 +799,16 @@ if __name__ == "__main__":
     dataset1.data_dir = working_dir1 + XrayDataset.data_fold
     dataset1.results_dir = working_dir1 + XrayDataset.results_fold
     dataset1.preliminary_dir = dataset1.results_dir + XrayDataset.preliminary_fold
-    dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
+    # dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
     addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Augmented" \
         if ExtraDatasetType.AUGMENT in extra_dataset_types1 else "Extended"
     print(addon2, "dataset:")
-    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
+    '''dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
 
-    dataset1.count_data(extra_dataset_types=extra_dataset_types1, only_extra_name=dataset_name1 if only_extra1 else None)
+    dataset1.count_data(extra_dataset_types=extra_dataset_types1, only_extra_name=dataset_name1 if only_extra1 else None)'''
+
+    # Clean labels
+
