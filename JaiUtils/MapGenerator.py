@@ -1,9 +1,7 @@
 # Import packages
 import os
-
-from flatbuffers.flexbuffers import Object
-
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 torch.use_deterministic_algorithms(True)
 
@@ -11,9 +9,13 @@ import numpy as np
 import pandas as pd
 import cv2
 import matplotlib.pyplot as plt
+import re
 from sklearn.metrics import f1_score, matthews_corrcoef
 from signal_grad_cam import TorchCamBuilder
-
+from flatbuffers.flexbuffers import Object
+from agno.agent import Agent
+from agno.media import Image
+from agno.models.ollama import Ollama
 from Enumerators.SetType import SetType
 from DataUtils.XrayDataset import XrayDataset
 from TrainUtils.NetworkTrainer import NetworkTrainer
@@ -23,7 +25,7 @@ from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
 # Class
 class MapGenerator:
     def __init__(self, working_dir, model_name, trial_n, use_cuda=False, projection_dataset=False,
-                 selected_segments=None, selected_projection=None, is_cropped=False):
+                 selected_segments=None, selected_projection=None, is_cropped=False, yolo_cropping=False):
         # Initialize attributes
         self.working_dir = working_dir
         self.jai_dir = working_dir + XrayDataset.results_fold + XrayDataset.jai_fold
@@ -36,9 +38,12 @@ class MapGenerator:
         self.use_cuda = use_cuda
         self.projection_dataset = projection_dataset
         self.is_cropped = is_cropped
+        self.yolo_cropping = yolo_cropping
 
         # Load data
         addon = "" if not is_cropped else "cropped_"
+        if yolo_cropping:
+            addon = "yolo_" + addon
         self.selected_segments = selected_segments
         self.selected_projection = selected_projection
         self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_training",
@@ -60,9 +65,10 @@ class MapGenerator:
         PretrainedFeatureExtractor.freeze_layers(self.trainer.net, [])
 
         # Assess model
-        self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
-        if not is_cropped:
-            self.aggregate_evals()
+        if not yolo_cropping:
+            self.trainer.summarize_performance(show_test=True, show_process=True, show_cm=True, assess_calibration=True)
+            if not is_cropped:
+                self.aggregate_evals()
 
         # Define CAM builder
         model = self.trainer.net.to("cuda")
@@ -122,6 +128,8 @@ class MapGenerator:
             segm_names = data.dicom_instances
             data_names = []
         addon = "_multi_projection" if not self.projection_dataset else "_single_projection"
+        if self.yolo_cropping:
+            addon += "_yolo_cropping"
         cam_dir = self.jai_dir + set_type.value + addon + "/"
 
         # Request cams
@@ -223,6 +231,10 @@ class MapGenerator:
                                                                bar_ranges_dict=bar, fig_size=(20, 12),
                                                                results_dir_path=cam_dir + data_names_tmp[i] + "/")
 
+                    with open(cam_dir + data_names_tmp[i] + "/" + "model_predictions.txt", "w", encoding="utf-8") as f:
+                        for k, v in prob.items():
+                            f.write(f"{k[-1]}: {v[0]:.5f}\n")
+
         return cams_dict, predicted_probs_dict, bar_ranges_dict
 
     def get_overlapped_radiography(self, cams_dict, predicted_probs_dict, bar_ranges_dict, set_type, target_classes,
@@ -235,6 +247,8 @@ class MapGenerator:
                                                 selected_projection=self.selected_projection)
         data_names = full_dataset.dicom_projection_instances if desired_instances is None else desired_instances
         addon = "_multi_projection" if not self.projection_dataset else "_single_projection"
+        if self.yolo_cropping:
+            addon += "_yolo_cropping"
         cam_dir = self.jai_dir + set_type.value + addon + "/"
         box_keys = ["x_min", "x_max", "y_min", "y_max"]
 
@@ -247,7 +261,6 @@ class MapGenerator:
                         original_item, _ = full_dataset.get_data_from_name(data_name)
                         frac_labels = []
                         for j in range(len(original_item)):
-                            print("proj")
                             # Get full radiography
                             _, original_projection_j, frac_label_j = original_item[j]
                             original_img = np.stack([original_projection_j / np.max(original_projection_j)] * 3, axis=-1)
@@ -260,7 +273,6 @@ class MapGenerator:
                                 if not f"{cropped_extra[0]:03}" + cropped_extra[1].lower() == data_name:
                                     continue
                                 else:
-                                    print("vertebra")
                                     _, _, _, cropped_info = cropped_item[0]
                                     if "proj" + str(j) not in cropped_info:
                                         continue
@@ -270,7 +282,6 @@ class MapGenerator:
                                         full_height = int(cropped_info.split("height=")[-1].split(",")[0])
                                         original_img = cv2.resize(original_img, (full_width, full_height))
                                         full_cam = np.zeros_like(original_img)[:, :, 0]
-                                        print("ok")
                                         flag = False
 
                                     box = {}
@@ -287,10 +298,18 @@ class MapGenerator:
                                     vertebra_cam = cams_dict[cam_key][cropped_extra[2]] / 255.0 * (max_val - min_val) + min_val
                                     for row in range(box["y_min"], (box["y_max"] + 1)):
                                         for col in range(box["x_min"], (box["x_max"] + 1)):
-                                            if full_cam[row, col] == 0:
-                                                full_cam[row, col] = vertebra_cam[row - box["y_min"], col - box["x_min"]]
-                                            else:
-                                                full_cam[row, col] = max(full_cam[row, col], vertebra_cam[row - box["y_min"], col - box["x_min"]])
+                                            full_h, full_w = full_cam.shape[:2]
+                                            x_min = max(0, box["x_min"])
+                                            y_min = max(0, box["y_min"])
+                                            x_max = min(full_w, box["x_max"])
+                                            y_max = min(full_h, box["y_max"])
+                                            box_h = y_max - y_min
+                                            box_w = x_max - x_min
+                                            cam_h, cam_w = vertebra_cam.shape[:2]
+                                            usable_h = min(box_h, cam_h)
+                                            usable_w = min(box_w, cam_w)
+                                            full_cam[y_min:y_min + usable_h, x_min:x_min + usable_w] \
+                                                = vertebra_cam[:usable_h, :usable_w]
 
                             # Draw bounding boxes
                             original_img_tmp = original_img.copy()
@@ -316,15 +335,102 @@ class MapGenerator:
                             data_name_tmp = data_name + "_proj" + str(j)
                             if data_name_tmp not in os.listdir(cam_dir):
                                 os.mkdir(cam_dir + data_name_tmp)
-                            self.cam_builder.overlapped_output_display(data_list=[original_img_tmp], data_labels=[data_label],
+
+                            if "raw_image.png" not in os.listdir(cam_dir + data_name_tmp + "/"):
+                                plt.figure()
+                                plt.imshow(original_img_tmp)
+                                plt.xticks([], [])
+                                plt.yticks([], [])
+                                plt.savefig(cam_dir + data_name_tmp + "/raw_image.png", format="png", bbox_inches="tight", pad_inches=0, dpi=500)
+
+                            plt.figure()
+                            plt.imshow(original_img_tmp)
+                            norm = self.cam_builder._CamBuilder__get_norm(full_cam)
+                            map = plt.imshow(full_cam, cmap="inferno", norm=norm)
+                            map.set_alpha(0.3)
+                            plt.xticks([], [])
+                            plt.yticks([], [])
+                            filename = (cam_dir + data_name_tmp + "/" + "results_" + comparison_algorithm + "_" +
+                                        re.sub(r"\W", "_", comparison_layer) + "_class" + str(comparison_class) + ".png")
+                            plt.savefig(filename, format="png", bbox_inches="tight", pad_inches=0, dpi=500)
+                            '''self.cam_builder.overlapped_output_display(data_list=[original_img_tmp], data_labels=[data_label],
                                                                        predicted_probs_dict=prob, cams_dict=cam,
                                                                        explainer_types=comparison_algorithm,
                                                                        target_classes=comparison_class,
                                                                        target_layers=target_layers,
                                                                        data_names=[data_name_tmp],
                                                                        bar_ranges_dict=bar, fig_size=(20, 12),
-                                                                       results_dir_path=cam_dir + data_name_tmp + "/")
+                                                                       results_dir_path=cam_dir + data_name_tmp + "/")'''
 
+    def get_textual_explainer(self):
+        role = ("Sei un radiologo muscoloscheletrico incaricato di analizzare una porzione di radiografia vertebrale e "
+                "di ricavare quali sono gli elementi a favore di una classe proposta (frattura assente o frattura "
+                "presente) tra quelli evidenziati da un modello AI tramite una mappa di calore con colorazione inferno "
+                "dove i colori scuri (nero o grigio) identificano le parti di minore interesse mentre i colori brillanti"
+                " (giallo o arancio) identificano le parti di maggiore importanza secondo il modello.")
+        model = Ollama(id="qwen3-vl:4b", host="http://localhost:11434",
+                       options={"temperature": 0.1})
+        instructions = [
+            "Rispondi esclusivamente in italiano.",
+            "Produci un unico paragrafo di massimo tre frasi.",
+            "Non utilizzare elenchi, titoli, numerazioni o formattazione Markdown.",
+            "Restituisci soltanto la risposta finale e non mostrare il ragionamento seguito né riassumi i prompt forniti.",
+            "Nella risposta non utilizzare mai le parole heatmap, mappa, colormap, giallo, arancione, colore, intelligenza artificiale, modello o classificatore.",
+            "Considera esclusivamente le regioni maggiormente selezionate dalla mappa di calore (in giallo/arancione brillante) nella parte radiografica dell'immagine.",
+            "Ignora completamente titolo, nome del file, etichette, percentuali, barra laterale, valori numerici e qualsiasi testo visibile nell'immagine.",
+            "Non identificare il livello vertebrale o il tratto spinale.",
+            "Descrivi inizialmente la posizione relativa della regione selezionata dalla mappa di calore usando termini come superiore, inferiore, centrale, periferica, anteriore o posteriore.",
+            "Non chiamare una struttura piatto vertebrale, corticale, parete vertebrale o peduncolo quando la sua identificazione è incerta.",
+            "Non usare la semplice assenza di un'anomalia visibile come prova della classe frattura assente.",
+            "Valuta l'associazione tra un fenoeno e la classe proposta scegliendo esclusivamente una delle seguenti conclusioni: supporta, supporta parzialmente, è insufficiente oppure contraddice.",
+            "Devi cercare necessariamente elementi favorevoli alla classe proposta.",
+            "La classe proposta è soltanto l'ipotesi da valutare per cui tu devi cercare evidenza visiva.",
+            "Non aggiungere informazioni cliniche, anatomiche o diagnostiche non direttamente osservabili.",
+            "Non fornire una diagnosi definitiva."]
+        self.text_explainer = Agent(role=role, model=model, tools=[], markdown=False, instructions=instructions)
+        self.base_prompt = ("Analizza una singola proiezione radiografica contenente approssimativame una sola vertebra, "
+                            "o una sua porzione o l'intero tratto sacro-coccigeo. La proiezione può essere antero-posteriore "
+                            "o latero-laterale. Considera esclusivamente le regioni maggiormente selezionate nella parte "
+                            "radiografica e ignora completamente ogni testo, titolo, barra, o valore numerico nell'immagine. "
+                            "Prima descrivi soltanto ciò che è direttamente osservabile; successivamente valuta il rapporto "
+                            "tra tale osservazione e la classe proposta")
+        self.ita_classes = ["frattura assente", "frattura presente"]
+
+    def textually_explain(self, set_type, desired_instances):
+        addon = "_multi_projection" if not self.projection_dataset else "_single_projection"
+        if self.yolo_cropping:
+            addon += "_yolo_cropping"
+        cam_dir = self.jai_dir + set_type.value + addon + "/"
+
+        for instance in desired_instances:
+            for folder in os.listdir(cam_dir):
+                if instance in folder:
+                    tmp_dir = cam_dir + folder + "/"
+                    explanation_path = tmp_dir + "text_explanations.txt"
+                    with open(explanation_path, "w", encoding="utf-8") as explanation_file:
+                        for overlapped_input in os.listdir(tmp_dir):
+                            if overlapped_input.startswith("Grad-CAM") or overlapped_input.endswith("txt") or overlapped_input.startswith("raw"):
+                                continue
+
+                            # Complement prompt with class information
+                            predicted_class = int(overlapped_input.split("_class")[-1].split(".")[0])
+                            predicted_class = self.ita_classes[predicted_class]
+                            prompt = (self.base_prompt + (f"La regione evidenziata è associata alla classe {predicted_class} secondo il modello AI. "
+                                                          "Descrivi esclusivamente ciò che è chiaramente visibile nella regione evidenziata (giallo/arancion brillante) come evidenza della classe proposta se c'è effettivamente un nesso tra regione evidenziata e classe. "
+                                                          f"Devi essere estremamente persuasivo, in quanto il paragrafo che scriverai verrà valutato da un altro medico come evidenza/prova giudiziale a favore della classe {predicted_class}."
+                                                          f"Indica se le sole caratteristiche osservate supportano, supportano parzialmente, contraddicono oppure sono insufficienti per valutare la classe {predicted_class}. "
+                                                          "Non formulare ipotesi sulle classi alternative, sulla confidenza della previsione o su reperti non visibili. "
+                                                          "Non presumere la presenza o l'assenza di una patologia se non è direttamente dimostrabile dall'immagine. "
+                                                          "La classe proposta potrebbe non corrispondere alla diagnosi reale. "))
+
+                            # Process input
+                            img_input = [Image(filepath=tmp_dir + overlapped_input, detail="high")]
+
+                            # Explain
+                            print(f"Processing {folder}/{overlapped_input}...")
+                            response = self.text_explainer.run(prompt, images=img_input)
+                            explanation_file.write(overlapped_input + "\n")
+                            explanation_file.write(response.content.strip().replace("\n\n", " ").replace("\n", " ") + "\n\n")
 
     @staticmethod
     def majority_vote(x):
@@ -458,28 +564,30 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(111099)
 
     # Define variables
-    working_dir1 = "./../../"
+    # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_dynamicundersampling_optuna"
-    trial_n1 = 34
-    use_cuda1 = False
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize"
+    trial_n1 = 2
+    use_cuda1 = True
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
     is_cropped1 = True
 
     # Define generator
+    yolo_cropping1 = True
     generator1 = MapGenerator(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1, use_cuda=use_cuda1,
                               projection_dataset=projection_dataset1, selected_segments=selected_segments1,
-                              selected_projection=selected_projection1, is_cropped=is_cropped1)
+                              selected_projection=selected_projection1, is_cropped=is_cropped1,
+                              yolo_cropping=yolo_cropping1)
 
     # Draw maps
-    set_type1 = SetType.VAL
+    set_type1 = SetType.TEST
     target_classes1 = [0, 1]
     explainer_types1 = ["Grad-CAM"]
-    target_layers1 = ["feature_extractor.features.7.2.conv3"]
-    desired_instances1 = ["032d"] #["446l"]
-    cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
+    target_layers1 = ["feature_extractor.features.7.1.conv3"]
+    desired_instances1 = ["308c", "370s", "093l", "354d"]
+    '''cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
                                                                              target_classes=target_classes1,
                                                                              explainer_types=explainer_types1,
                                                                              target_layers=target_layers1,
@@ -489,4 +597,8 @@ if __name__ == "__main__":
     generator1.get_overlapped_radiography(cams_dict1, predicted_probs_dict1, bar_ranges_dict1, set_type=set_type1,
                                           target_classes=target_classes1, explainer_types=explainer_types1,
                                           target_layers=target_layers1, desired_instances=desired_instances1,
-                                          box_thickness=0, blur=True)
+                                          box_thickness=0, blur=True)'''
+
+    # Textual explainer
+    generator1.get_textual_explainer()
+    generator1.textually_explain(set_type1, desired_instances1)

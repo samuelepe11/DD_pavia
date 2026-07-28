@@ -162,9 +162,9 @@ class OptunaParamFinder:
         # Sample parameters
         params = {
             "n_conv_segment_neurons": 0, # np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 5, 11, step=1))),
-            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 5, 11, step=1))),
+            "n_conv_view_neurons": 0, # np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 5, 11, step=1))),
             "n_conv_segment_layers": 0, # int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
-            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 0, 3, step=1)),
+            "n_conv_view_layers": 0, # int(trial.suggest_int("n_conv_view_layers", 0, 3, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
@@ -361,11 +361,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize_400"
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize_dataclean"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
-    epochs1 = 400
+    epochs1 = 200
     val_epochs1 = 10
     use_cuda1 = True
     projection_dataset1 = True
@@ -380,7 +380,8 @@ if __name__ == "__main__":
     addon1 = "augmented_" if is_augmented1 else "extended_" if is_extended1 else ""
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
+                                           selected_projection=selected_projection1,
+                                           removable_instances_txt="removable_instances_training.txt")
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
@@ -394,7 +395,7 @@ if __name__ == "__main__":
     search_for_untracked_models1 = False
     weight_loss1 = False
     dynamic_under_sampling1 = False
-    transpose1 = False
+    transpose1 = True
     equalize_images1 = True
     optuna1 = OptunaParamFinder(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
                                 val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,

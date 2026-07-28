@@ -4,6 +4,10 @@ import pandas as pd
 import cv2
 import yaml
 import torch
+import re
+import csv
+from pathlib import Path
+from datetime import datetime
 from ultralytics import YOLO
 
 from TrainUtils.NetworkTrainer import NetworkTrainer
@@ -204,29 +208,73 @@ class YOLOTrainer:
         addon = "_tune" if tune else ""
         pred_dir = self.results_dir + self.model_name + addon + "/pred/" + dataset_name + "/"
         os.makedirs(pred_dir, exist_ok=True)
+        vertebra_dir = pred_dir + "vertebrae/"
+        os.makedirs(vertebra_dir, exist_ok=True)
+        csv_path = vertebra_dir + "cropping_ref.csv"
         img_dir = self.data_dir + "/images/" + dataset_name
         results = self.model.predict(source=img_dir, stream=True)
-        for r in results:
-            img = r.orig_img.copy()
-            img = cv2.normalize(img[:, :, 0], None, 0, 255, cv2.NORM_MINMAX).astype("uint8")
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            box_img = img.copy()
-            if r.boxes is not None:
-                for box in r.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    if self.n_classes == 2:
-                        cls = int(box.cls[0])
-                        color = (0, 0, 255) if cls == 1 else (0, 255, 0)
-                    else:
-                        color = (0, 0, 255) if conf < 0.3 else (255, 0, 0) if conf > 0.7 else (0, 255, 0)
-                    cv2.rectangle(box_img, (x1, y1), (x2, y2), color, 3, lineType=cv2.LINE_8)
-                    cv2.putText(box_img, f"{conf:.2f}", (x1, max(y1 - 5, 0)), cv2.FONT_HERSHEY_SIMPLEX,
-                                2, color, 3)
-            alpha = 0.2
-            out = cv2.addWeighted(img, alpha, box_img, 1 - alpha, 0)
-            filename = os.path.basename(r.path)
-            cv2.imwrite(pred_dir + filename, out)
+
+        csv_columns = ["file_name", "segment", "projection", "projection_type", "width", "height", "vertebra_name",
+                       "x_min", "x_max", "y_min", "y_max", "fracture_present", "annotator", "timestamp",
+                       "annotator_counter", "global_counter"]
+        projection_types = {0: "antero-posterior", 1: "latero-lateral"}
+        global_counter = 0
+        with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=csv_columns)
+            writer.writeheader()
+            for r in results:
+                img = r.orig_img.copy()
+                img = cv2.normalize(img[:, :, 0], None, 0, 255, cv2.NORM_MINMAX).astype("uint8")
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                box_img = img.copy()
+
+                height, width = img.shape[:2]
+                original_filename = os.path.basename(r.path)
+                filename_without_extension = os.path.splitext(original_filename)[0]
+                instance_name, projection_part = filename_without_extension.rsplit("_proj", 1)
+                projection_number = int(projection_part)
+                projection_type = projection_types.get(projection_number, f"projection-{projection_number}")
+                vertebra_name = next((character.upper() for character in reversed(instance_name) if character.isalpha()), "")
+
+                if r.boxes is not None:
+                    boxes = sorted(r.boxes, key=lambda current_box: float(current_box.xyxy[0][1]))
+                    for counter, box in enumerate(boxes, start=1):
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        conf = float(box.conf[0])
+                        x1 = max(0, min(x1, width - 1))
+                        x2 = max(0, min(x2, width))
+                        y1 = max(0, min(y1, height - 1))
+                        y2 = max(0, min(y2, height))
+                        if x2 <= x1 or y2 <= y1:
+                            print(f"Invalid bounding box skipped: {(x1, y1, x2, y2)}")
+                            continue
+
+                        if self.n_classes == 2:
+                            cls = int(box.cls[0])
+                            color = (0, 0, 255) if cls == 1 else (0, 255, 0)
+                        else:
+                            color = (0, 0, 255) if conf < 0.3 else (255, 0, 0) if conf > 0.7 else (0, 255, 0)
+                        cv2.rectangle(box_img, (x1, y1), (x2, y2), color, 3, lineType=cv2.LINE_8)
+                        cv2.putText(box_img, f"{conf:.2f}", (x1, max(y1 - 5, 0)), cv2.FONT_HERSHEY_SIMPLEX,
+                                    2, color, 3)
+
+                        vertebra_img = img[y1:y2, x1:x2]
+                        vertebra_filename = f"{instance_name}_proj{projection_number}_{counter}.png"
+                        vertebra_path = vertebra_dir + vertebra_filename
+                        cv2.imwrite(vertebra_path, vertebra_img)
+                        timestamp = datetime.now().strftime("%m-%d-%Y %H:%M:%S")
+                        writer.writerow(
+                            {"file_name": vertebra_filename, "segment": instance_name, "projection": projection_number,
+                             "projection_type": projection_type, "width": width, "height": height,
+                             "vertebra_name": vertebra_name, "x_min": x1, "x_max": x2, "y_min": y1, "y_max": y2,
+                             "fracture_present": False, "annotator": "yolo", "timestamp": timestamp,
+                             "annotator_counter": counter - 1, "global_counter": global_counter})
+                        global_counter += 1
+
+                alpha = 0.2
+                out = cv2.addWeighted(img, alpha, box_img, 1 - alpha, 0)
+                filename = os.path.basename(r.path)
+                cv2.imwrite(pred_dir + filename, out)
 
     @staticmethod
     def load_model(working_dir, model_name, n_classes):
@@ -250,8 +298,8 @@ if __name__ == "__main__":
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="xray_dataset_test")
 
     # Define trainer
-    model_name1 = "yolo"
-    n_classes1 = 2
+    model_name1 = "yolo_tune"
+    n_classes1 = 1
     selected_model1 = "yolov8x.pt"
     augment1 = True
     trainer1 = YOLOTrainer(working_dir=working_dir1, train_data=train_data1, val_data=val_data1, test_data=test_data1,
@@ -267,7 +315,7 @@ if __name__ == "__main__":
     #trainer1.train(epochs=epochs1, img_size=img_size1, batch=batch1, use_cuda=use_cuda1, tune=tune1)
 
     # Load and test model
-    '''trainer1 = YOLOTrainer.load_model(working_dir=working_dir1, model_name=model_name1, n_classes=n_classes1)
+    trainer1 = YOLOTrainer.load_model(working_dir=working_dir1, model_name=model_name1, n_classes=n_classes1)
     trainer1.save_predictions("training", tune=tune1)
     trainer1.save_predictions("validation", tune=tune1)
-    trainer1.save_predictions("test", tune=tune1)'''
+    trainer1.save_predictions("test", tune=tune1)

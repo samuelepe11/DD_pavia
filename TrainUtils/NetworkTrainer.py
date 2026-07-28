@@ -13,6 +13,7 @@ import io
 import gc
 import json
 import pandas as pd
+from pyarrow.dataset import dataset
 from sqlalchemy.testing import is_not_
 from tensorflow.python.ops.linalg.linalg_impl import transpose
 from torch.utils.data import DataLoader, Subset
@@ -21,11 +22,16 @@ from sklearn.metrics import roc_auc_score, matthews_corrcoef
 from pandas import DataFrame
 from functools import partial
 from torchvision.transforms.v2.functional import equalize
+
+from Networks.BaseResNeXt50AllFreeze import BaseResNeXt50AllFreeze
 from calfram.calibrationframework import select_probability, reliabilityplot, calibrationdiagnosis, classwise_calibration
 from contextlib import redirect_stdout
 from cleanlab import Datalab
 from sklearn.model_selection import StratifiedGroupKFold
 from enum import Enum
+
+import textwrap
+from matplotlib.backends.backend_pdf import PdfPages
 
 from DataUtils.XrayDataset import XrayDataset
 from DataUtils.XrayProjectionDataset import XrayProjectionDataset
@@ -73,6 +79,8 @@ class NetworkTrainer:
         self.net_params = net_params if net_params is not None else self.default_net_params
         if self.net_type == NetType.BASE_RES_NEXT50:
             self.net = BaseResNeXt50(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
+        elif self.net_type == NetType.BASE_RES_NEXT50_ALLFREEZE:
+            self.net = BaseResNeXt50AllFreeze(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.BASE_RES_NET18:
             self.net = BaseResNet18(params=self.net_params, device=self.device, weight_loss=weight_loss and not dynamic_under_sampling, transpose=transpose)
         elif self.net_type == NetType.BASE_RES_NEXT101:
@@ -205,7 +213,7 @@ class NetworkTrainer:
             else:
                 net.train()
 
-            #loader = self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(pos_idx, neg_idx)
+            # loader = self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(pos_idx, neg_idx)
             loader = (self.train_loader if not self.dynamic_under_sampling else self.create_balanced_loader(dataset=self.train_data,
                                                                                                             labels=train_dataset_labels,
                                                                                                             neg_proportion=2))
@@ -819,16 +827,95 @@ class NetworkTrainer:
         plt.savefig(imgpath, dpi=300, bbox_inches="tight")
         plt.close()
 
-    def clean_labels(self, records, k=5, clean_epochs=20, seed=111099, neg_proportion=2, output_dir=None, show=False,
-                     feature_layer_ind=-1):
+    @staticmethod
+    def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
+                   projection_dataset=False, s3=None, batch_size=None, is_cropped=False):
+        file_name = model_name if trial_n is None else "trial_" + str(trial_n)
+        print("Loading " + file_name + "...")
+        filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
+                    file_name + ".pt")
+        if s3 is not None:
+            filepath = s3.open(filepath)
+        checkpoint = torch.load(filepath, weights_only=False)
+
+        if "enhance_images" not in checkpoint.keys():
+            checkpoint.update({"enhance_images": False})
+        weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
+        dynamic_under_sampling = False if not "dynamic_under_sampling" in checkpoint.keys() else checkpoint["dynamic_under_sampling"]
+        transpose = False if not "transpose" in checkpoint.keys() else checkpoint["transpose"]
+        equalize_images = False if not "equalize_images" in checkpoint.keys() else checkpoint["equalize_images"]
+        network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
+                                         val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
+                                         epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
+                                         preprocess_inputs=checkpoint["preprocess_inputs"],
+                                         net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
+                                         projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
+                                         is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling,
+                                         transpose=transpose, equalize_images=equalize_images)
+        network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
+
+        if batch_size is not None:
+            network_trainer.batch_size = batch_size
+
+        # Handle models created with Optuna
+        if trial_n is None and network_trainer.model_name.endswith("_optuna"):
+            old_model_name = network_trainer.model_name
+            network_trainer.model_name = old_model_name[:-7]
+            addon = XrayDataset.models_fold
+            if addon in network_trainer.results_dir:
+                addon = ""
+            network_trainer.results_dir = (network_trainer.results_dir[:-(len(old_model_name) + 1)] +
+                                           addon + network_trainer.model_name + "/")
+        return network_trainer
+
+    @staticmethod
+    def set_seed(seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cuda.deterministic = True
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    @staticmethod
+    def show_performance_table(stats, set_name, boot_stats=None):
+        print("Performance for", set_name.upper() + " set:")
+        for stat in ["acc", "loss"] + StatsHolder.table_stats:
+            if boot_stats is None:
+                addon = ""
+            else:
+                if stat not in ["loss", "mcc"]:
+                    s = str(np.round(boot_stats.__dict__[stat + "_s"] * 100, 2)) + "%)"
+                else:
+                    s = str(np.round(boot_stats.__dict__[stat + "_s"], 2)) + ")"
+                addon = " (std: " + s
+
+            if stat not in ["loss", "mcc"]:
+                s = str(np.round(stats.__dict__[stat] * 100, 2)) + "%"
+            else:
+                s = str(np.round(stats.__dict__[stat], 2))
+            name = StatsHolder.comparable_stats[stat] if stat in StatsHolder.comparable_stats else stat.upper()
+            print(" - " + name + ": " + s + addon)
+
+    @staticmethod
+    def show_calibration_table(stats, set_name):
+        print("Calibration information for", set_name.upper() + " set:")
+        for stat in stats.calibration_results.keys():
+            print(" - " + stat + ": " + str(stats.calibration_results[stat]))
+
+    def clean_labels(self, records, dataset=None, k=5, clean_epochs=20, seed=111099, neg_proportion=2, output_dir=None,
+                     show=False, feature_layer_ind=-1):
         # Check inputs
+        if dataset is None:
+            dataset = self.train_data
         records_df = DataFrame(records).reset_index(drop=True)
         if not self.projection_dataset:
             raise ValueError("The supplied records are projection-level records. Initialize NetworkTrainer with "
                              "projection_dataset=True.")
-        if len(records_df) != len(self.train_data):
+        if len(records_df) != len(dataset):
             raise ValueError("Record/dataset length mismatch: " + f"{len(records_df)} records versus " +
-                             f"{len(self.train_data)} items in self.train_data. The records must correspond exactly to "
+                             f"{len(dataset)} items in the dataset. The records must correspond exactly to "
                              f"XrayProjectionDataset.")
         labels = records_df["label"].to_numpy(dtype=np.int64)
         patient_ids = records_df["patient_id"].to_numpy()
@@ -927,8 +1014,8 @@ class NetworkTrainer:
                       + f"{np.sum(train_labels == 1)} positive")
                 print(f"  Held out: {len(held_out_indices)} projections, " + f"{len(np.unique(patient_ids[held_out_indices]))} patients, "
                       + f"{np.sum(held_out_labels == 1)} positive")
-            train_subset = Subset(self.train_data, train_indices.tolist())
-            held_out_subset = Subset(self.train_data, held_out_indices.tolist())
+            train_subset = Subset(dataset, train_indices.tolist())
+            held_out_subset = Subset(dataset, held_out_indices.tolist())
             model = create_fresh_model()
             optimizer = create_optimizer(model)
             if uses_logits:
@@ -1004,58 +1091,13 @@ class NetworkTrainer:
 
         # Run Cleanlab
         if output_dir is None:
-            output_dir = os.path.join(self.results_dir, "cleanlab")
+            output_dir = os.path.join(self.results_dir, dataset.set_type.value + "_cleanlab")
         lab, full_report, features, issue_summary = (self.run_cleanlab_full_audit(records_df=records_df, labels=labels,
                                                                                   oof_pred_probs=oof_pred_probs,
                                                                                   output_dir=output_dir,
                                                                                   feature_layer_ind=feature_layer_ind,
                                                                                   show=show))
         return lab, full_report, oof_pred_probs, features, issue_summary,
-
-
-        '''cleanlab_data = records_df.drop(columns=["image"], errors="ignore").copy()
-        cleanlab_data.insert(0, "dataset_index", np.arange(len(cleanlab_data)))
-        cleanlab_data["projection_id"] = cleanlab_data["projection_id"].map(
-            lambda x: x.value if isinstance(x, ProjectionType) else x)
-        lab = Datalab(data=cleanlab_data, label_name="label")
-        lab.find_issues(pred_probs=oof_pred_probs, issue_types={"label": {}})
-        label_issues = (lab.get_issues("label").reset_index(drop=True))
-        label_report = DataFrame({"dataset_index": np.arange(len(records_df)), "patient_id": records_df["patient_id"],
-                                  "segment_idx": records_df["segment_idx"], "projection_idx": records_df["projection_idx"],
-                                  "projection_id": records_df["projection_id"], "original_label": labels,
-                                  "probability_no_fracture": oof_pred_probs[:, 0], "probability_fracture": oof_pred_probs[:, 1]})
-        label_report = DataFrame(np.concatenate([label_report.to_numpy(), label_issues.to_numpy()], axis=1),
-                                 columns=(list(label_report.columns) + list(label_issues.columns)))
-        label_report["dataset_index"] = (label_report["dataset_index"].astype(int))
-        label_report["segment_idx"] = (label_report["segment_idx"].astype(int))
-        label_report["projection_idx"] = (label_report["projection_idx"].astype(int))
-        label_report["original_label"] = (label_report["original_label"].astype(int))
-        if "is_label_issue" in label_report.columns:
-            label_report["is_label_issue"] = (label_report["is_label_issue"].astype(bool))
-        label_report = label_report.sort_values(by=["is_label_issue", "label_score"], ascending=[False, True]).reset_index(drop=True)
-        if output_dir is None:
-            output_dir = os.path.join(self.results_dir, "cleanlab")
-        os.makedirs(output_dir, exist_ok=True)
-        report_csv_path = os.path.join(output_dir, "cleanlab_label_report.csv")
-        flagged_csv_path = os.path.join(output_dir, "cleanlab_flagged_labels.csv")
-        probability_path = os.path.join(output_dir, "cleanlab_oof_pred_probs.npy")
-        text_report_path = os.path.join(output_dir, "cleanlab_report.txt")
-        label_report.to_csv(report_csv_path, index=False)
-        label_report.query("is_label_issue").to_csv(flagged_csv_path, index=False)
-        np.save(probability_path, oof_pred_probs)
-        report_buffer = io.StringIO()
-        with redirect_stdout(report_buffer):
-            lab.report()
-        report_text = report_buffer.getvalue()
-        print()
-        print(report_text)
-        with open(text_report_path, "w", encoding="utf-8") as report_file:
-            report_file.write(report_text)
-        print("Cleanlab results saved in:", output_dir)
-        print("Detailed report:", report_csv_path)
-        print("Flagged labels:", flagged_csv_path)
-        print("Text report:", text_report_path)
-        return lab, label_report, oof_pred_probs'''
 
     def extract_features_from_loaded_model(self, dataset=None, feature_layer_ind=-1, show=False):
         if dataset is None:
@@ -1226,7 +1268,7 @@ class NetworkTrainer:
                 return json.dumps(np.asarray(value).tolist() if isinstance(value, np.ndarray) else value)
             return value
 
-        metadata_columns = ["patient_id", "segment_idx", "projection_idx", "projection_id"]
+        metadata_columns = ["dicom_instance", "patient_id", "projection_idx", "projection_id"]
         metadata_columns = [column for column in metadata_columns if column in records_df.columns]
         review_table = records_df[metadata_columns].reset_index(drop=True).copy()
         review_table.insert(0, "dataset_index", np.arange(len(labels), dtype=np.int64))
@@ -1341,82 +1383,329 @@ class NetworkTrainer:
         print("Original-model features:", os.path.join(output_dir, "cleanlab_original_model_features.npy"))
         return lab, review_table, features, summary_table
 
-    @staticmethod
-    def load_model(working_dir, model_name, trial_n=None, use_cuda=True, train_data=None, val_data=None, test_data=None,
-                   projection_dataset=False, s3=None, batch_size=None, is_cropped=False):
-        file_name = model_name if trial_n is None else "trial_" + str(trial_n)
-        print("Loading " + file_name + "...")
-        filepath = (working_dir + XrayDataset.results_fold + XrayDataset.models_fold + model_name + "/" +
-                    file_name + ".pt")
-        if s3 is not None:
-            filepath = s3.open(filepath)
-        checkpoint = torch.load(filepath, weights_only=False)
+    def create_cleanlab_review_pdf(self, manual_review_path=None, output_pdf_path=None, include_dataset_level_issues=True,
+                                   max_pages=None, removable_instances_path=None):
+        # Paths
+        cleanlab_dir = os.path.join(self.results_dir, "cleanlab")
+        if manual_review_path is None:
+            manual_review_path = os.path.join(cleanlab_dir, "cleanlab_full_manual_review.csv")
+        if output_pdf_path is None:
+            output_pdf_path = os.path.join(cleanlab_dir, "cleanlab_manual_review.pdf")
+        if not os.path.isfile(manual_review_path):
+            raise FileNotFoundError(f"Manual-review CSV not found: {manual_review_path}")
+        os.makedirs(os.path.dirname(output_pdf_path) or ".", exist_ok=True)
+        review_df = pd.read_csv(manual_review_path)
 
-        if "enhance_images" not in checkpoint.keys():
-            checkpoint.update({"enhance_images": False})
-        weight_loss = False if not "weight_loss" in checkpoint.keys() else checkpoint["weight_loss"]
-        dynamic_under_sampling = False if not "dynamic_under_sampling" in checkpoint.keys() else checkpoint["dynamic_under_sampling"]
-        transpose = False if not "transpose" in checkpoint.keys() else checkpoint["transpose"]
-        equalize_images = False if not "equalize_images" in checkpoint.keys() else checkpoint["equalize_images"]
-        network_trainer = NetworkTrainer(model_name=model_name, working_dir=working_dir, train_data=train_data,
-                                         val_data=val_data, test_data=test_data, net_type=checkpoint["net_type"],
-                                         epochs=checkpoint["epochs"], val_epochs=checkpoint["val_epochs"],
-                                         preprocess_inputs=checkpoint["preprocess_inputs"],
-                                         net_params=checkpoint["net_params"], use_cuda=use_cuda, s3=s3,
-                                         projection_dataset=projection_dataset, enhance_images=checkpoint["enhance_images"],
-                                         is_cropped=is_cropped, weight_loss=weight_loss, dynamic_under_sampling=dynamic_under_sampling,
-                                         transpose=transpose, equalize_images=equalize_images)
-        network_trainer.net.load_state_dict(checkpoint["model_state_dict"])
+        if removable_instances_path is None:
+            removable_instances_path = os.path.join(self.working_dir, "data", "instance_removable.txt")
+        if not os.path.isfile(removable_instances_path):
+            raise FileNotFoundError(f"Removable-instances file not found: {removable_instances_path}")
+        with open(removable_instances_path, "r", encoding="utf-8") as removable_file:
+            removable_instances = {line.strip().strip(",").strip("'\"") for line in removable_file if line.strip()}
+        print("Instances to exclude from PDF:", len(removable_instances))
 
-        if batch_size is not None:
-            network_trainer.batch_size = batch_size
+        # Cleanlab issue columns
+        issue_definitions = {
+            "null": {"flag": "null_is_null_issue", "name": "Invalid/null feature vector", "dataset_level": False},
+            "label": {"flag": "label_is_label_issue", "name": "Possible incorrect label", "dataset_level": False},
+            "outlier": {"flag": "outlier_is_outlier_issue", "name": "Feature-space outlier", "dataset_level": False},
+            "near_duplicate": {"flag": "near_duplicate_is_near_duplicate_issue", "name": "Near duplicate", "dataset_level": False},
+            "data_valuation": {"flag": "data_valuation_is_data_valuation_issue", "name": "Low data valuation",
+                               "dataset_level": False},
+            "non_iid": {"flag": "non_iid_is_non_iid_issue", "name": "Non-IID pattern", "dataset_level": True},
+            "class_imbalance": {"flag": "class_imbalance_is_class_imbalance_issue", "name": "Class-imbalance flag",
+                                "dataset_level": True},
+            "underperforming_group": {"flag": ("underperforming_group_is_underperforming_group_issue"),
+                                      "name": "Underperforming group", "dataset_level": True}}
 
-        # Handle models created with Optuna
-        if trial_n is None and network_trainer.model_name.endswith("_optuna"):
-            old_model_name = network_trainer.model_name
-            network_trainer.model_name = old_model_name[:-7]
-            addon = XrayDataset.models_fold
-            if addon in network_trainer.results_dir:
-                addon = ""
-            network_trainer.results_dir = (network_trainer.results_dir[:-(len(old_model_name) + 1)] +
-                                           addon + network_trainer.model_name + "/")
-        return network_trainer
+        # CSV Boolean conversion
+        def as_bool(value):
+            if pd.isna(value):
+                return False
+            if isinstance(value, (bool, np.bool_)):
+                return bool(value)
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                return bool(value)
+            return str(value).strip().lower() in {"true", "1", "yes", "y", "t"}
+        active_issues = {}
+        for issue_name, specification in issue_definitions.items():
+            if (specification["dataset_level"] and not include_dataset_level_issues):
+                continue
+            if specification["flag"] in review_df.columns:
+                active_issues[issue_name] = specification
+        if not active_issues:
+            raise RuntimeError("No Cleanlab issue columns were found in the CSV.")
 
-    @staticmethod
-    def set_seed(seed):
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cuda.deterministic = True
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        # Keep only rows with at least one issue
+        issue_mask = np.zeros(len(review_df), dtype=bool)
+        for specification in active_issues.values():
+            issue_mask |= (review_df[specification["flag"]].map(as_bool).to_numpy())
+        flagged_df = review_df.loc[issue_mask].copy()
 
-    @staticmethod
-    def show_performance_table(stats, set_name, boot_stats=None):
-        print("Performance for", set_name.upper() + " set:")
-        for stat in ["acc", "loss"] + StatsHolder.table_stats:
-            if boot_stats is None:
-                addon = ""
+        def dataframe_projection_key(row):
+            try:
+                projection_idx = str(int(float(row["projection_idx"])))
+            except (TypeError, ValueError):
+                projection_idx = str(row["projection_idx"]).strip()
+            return f"{str(row['dicom_instance']).strip()}_{projection_idx}"
+
+        flagged_df["_pdf_projection_key"] = flagged_df.apply(dataframe_projection_key, axis=1)
+        excluded_from_pdf = flagged_df["_pdf_projection_key"].isin(removable_instances)
+        print("Flagged instances excluded from PDF:", int(excluded_from_pdf.sum()))
+        flagged_df = flagged_df.loc[~excluded_from_pdf].copy()
+        flagged_df = flagged_df.drop(columns=["_pdf_projection_key"])
+        if flagged_df.empty:
+            raise RuntimeError("No instances with Cleanlab issues were found.")
+
+        # Highest-priority instances first
+        sort_columns = []
+        ascending = []
+        if "manual_review_priority" in flagged_df.columns:
+            sort_columns.append("manual_review_priority")
+            ascending.append(False)
+        if "pointwise_issue_count" in flagged_df.columns:
+            sort_columns.append("pointwise_issue_count")
+            ascending.append(False)
+        if ("probability_assigned_to_original_label" in flagged_df.columns):
+            sort_columns.append("probability_assigned_to_original_label")
+            ascending.append(True)
+        if sort_columns:
+
+            flagged_df = flagged_df.sort_values(sort_columns, ascending=ascending, na_position="last")
+        if max_pages is not None:
+            flagged_df = flagged_df.head(int(max_pages))
+
+        # Projection identifier lookup
+        if not hasattr(self.train_data, "dicom_projection_instances"):
+            raise AttributeError("self.train_data does not contain 'dicom_projection_instances'.")
+        projection_instances = [str(projection_identifier) for projection_identifier in self.train_data.dicom_projection_instances]
+        projection_lookup = {}
+        duplicate_identifiers = []
+        for dataset_index, projection_identifier in enumerate(projection_instances):
+            if projection_identifier in projection_lookup:
+                duplicate_identifiers.append(projection_identifier)
+                continue
+            projection_lookup[projection_identifier] = dataset_index
+        if duplicate_identifiers:
+            print("Warning: duplicate identifiers found in dicom_projection_instances. The first occurrence will be used.")
+            print("First duplicates:", duplicate_identifiers[:20])
+
+        # Helpers
+        def parse_index_list(value):
+            if value is None:
+                return []
+            if not isinstance(value, (list, tuple, np.ndarray)):
+                try:
+                    if pd.isna(value):
+                        return []
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(value, (list, tuple, np.ndarray)):
+                parsed = value
             else:
-                if stat not in ["loss", "mcc"]:
-                    s = str(np.round(boot_stats.__dict__[stat + "_s"] * 100, 2)) + "%)"
+                value = str(value).strip()
+                if not value or value.lower() in {"nan", "none", "[]"}:
+                    return []
+                try:
+                    parsed = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    try:
+                        parsed = ast.literal_eval(value)
+                    except (ValueError, SyntaxError):
+                        return []
+            indices = []
+
+            def flatten_indices(current_value):
+                if isinstance(current_value, (list, tuple, np.ndarray)):
+                    for nested_value in current_value:
+                        flatten_indices(nested_value)
+                    return
+                try:
+                    indices.append(int(current_value))
+                except (TypeError, ValueError):
+                    pass
+            flatten_indices(parsed)
+            return list(dict.fromkeys(indices))
+
+        def get_near_duplicate_keys(row=None, current_projection_key=None):
+            column = "near_duplicate_near_duplicate_sets"
+            if column not in row.index:
+                return []
+            duplicate_indices = parse_index_list(row[column])
+            duplicate_keys = []
+            for duplicate_index in duplicate_indices:
+                if 0 <= duplicate_index < len(projection_instances):
+                    duplicate_key = projection_instances[duplicate_index]
+
+                    # Do not report the current projection as its own duplicate
+                    if duplicate_key != current_projection_key:
+                        duplicate_keys.append(duplicate_key)
                 else:
-                    s = str(np.round(boot_stats.__dict__[stat + "_s"], 2)) + ")"
-                addon = " (std: " + s
+                    duplicate_keys.append(f"invalid-index-{duplicate_index}")
+            return list(dict.fromkeys(duplicate_keys))
 
-            if stat not in ["loss", "mcc"]:
-                s = str(np.round(stats.__dict__[stat] * 100, 2)) + "%"
+        def clean_projection_index(value):
+            try:
+                return str(int(float(value)))
+            except (TypeError, ValueError):
+                return str(value).strip()
+
+        def get_projection_key(row):
+            if ("dicom_projection_instance" in row.index and pd.notna(row["dicom_projection_instance"])):
+                return str(row["dicom_projection_instance"]).strip()
+            if ("dicom_instance" not in row.index or "projection_idx" not in row.index):
+                raise KeyError("The CSV must contain either 'dicom_projection_instance' or both 'dicom_instance' and 'projection_idx'.")
+            return (f"{str(row['dicom_instance']).strip()}_{clean_projection_index(row['projection_idx'])}")
+
+        def class_description(value):
+            if pd.isna(value):
+                return "unknown"
+            try:
+                value = int(float(value))
+            except (TypeError, ValueError):
+                return str(value)
+            return {0: "no fracture", 1: "fracture"}.get(value, str(value))
+
+        def get_image(dataset_index):
+            x, _ = self.train_data.__getitem__(dataset_index)
+            if len(x) == 0:
+                raise RuntimeError(f"Empty projection data at index {dataset_index}.")
+            image = x[0][1]
+            if torch.is_tensor(image):
+                image = image.detach().cpu().numpy()
             else:
-                s = str(np.round(stats.__dict__[stat], 2))
-            name = StatsHolder.comparable_stats[stat] if stat in StatsHolder.comparable_stats else stat.upper()
-            print(" - " + name + ": " + s + addon)
+                image = np.asarray(image)
+            image = np.squeeze(image)
 
-    @staticmethod
-    def show_calibration_table(stats, set_name):
-        print("Calibration information for", set_name.upper() + " set:")
-        for stat in stats.calibration_results.keys():
-            print(" - " + stat + ": " + str(stats.calibration_results[stat]))
+            # Convert channel-first images into channel-last format
+            if (image.ndim == 3 and image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4)):
+                image = np.moveaxis(image, 0, -1)
+            if image.ndim not in (2, 3):
+                raise RuntimeError(f"Unsupported image shape at index {dataset_index}: {image.shape}")
+            return image
+
+        def get_problem_list(row, current_projection_key):
+            problems = []
+            for issue_name, specification in active_issues.items():
+                flag_column = specification["flag"]
+                if not as_bool(row.get(flag_column, False)):
+                    continue
+                if issue_name == "near_duplicate":
+                    duplicate_keys = get_near_duplicate_keys(row=row, current_projection_key=current_projection_key)
+                    if duplicate_keys:
+                        problems.append("Near duplicate of: " + ", ".join(duplicate_keys))
+                    else:
+                        problems.append("Near duplicate")
+                else:
+                    problems.append(specification["name"])
+            return problems
+
+        # Generate PDF
+        skipped_instances = []
+        number_of_pages = 0
+        with PdfPages(output_pdf_path) as pdf:
+            metadata = pdf.infodict()
+            metadata["Title"] = "Cleanlab Manual Review"
+            metadata["Subject"] = ("Flagged X-ray projections from Cleanlab")
+            metadata["Author"] = "NetworkTrainer"
+            for _, row in flagged_df.iterrows():
+                try:
+                    projection_key = get_projection_key(row)
+                except Exception as exc:
+                    skipped_instances.append(f"Unknown key: {exc}")
+                    continue
+                if projection_key not in projection_lookup:
+                    skipped_instances.append(projection_key)
+                    continue
+                dataset_index = projection_lookup[projection_key]
+                try:
+                    image = get_image(dataset_index)
+                except Exception as exc:
+                    skipped_instances.append(f"{projection_key}: {exc}")
+                    continue
+                problems = get_problem_list(row=row, current_projection_key=projection_key)
+                if not problems:
+                    continue
+
+                # Classes and prediction probabilities
+                true_class = class_description(row.get("original_label", np.nan))
+                predicted_class = class_description(row.get("oof_predicted_label", np.nan))
+                probability_no_fracture = row.get("probability_no_fracture", np.nan)
+                probability_fracture = row.get("probability_fracture", np.nan)
+                probability_parts = []
+                if pd.notna(probability_no_fracture):
+                    probability_parts.append(f"P(no fracture)={float(probability_no_fracture):.3f}")
+                if pd.notna(probability_fracture):
+                    probability_parts.append(f"P(fracture)={float(probability_fracture):.3f}")
+                probability_text = ", ".join(probability_parts)
+                prediction_text = f"Predicted: {predicted_class}"
+                if probability_text:
+                    prediction_text += f" ({probability_text})"
+                title_information = f"True: {true_class} | {prediction_text}"
+                wrapped_title_information = textwrap.wrap(title_information, width=82, break_long_words=False, break_on_hyphens=False)
+                title_lines = [projection_key, *wrapped_title_information]
+                title_text = "\n".join(title_lines)
+                problem_lines = []
+                for problem in problems:
+                    wrapped_problem = textwrap.wrap(f"- {problem}", width=100, subsequent_indent="  ", break_long_words=False, break_on_hyphens=False)
+                    problem_lines.extend(wrapped_problem)
+                problems_text = "\n".join(problem_lines)
+
+                # Fixed page width and dynamic page height
+                image_height_px, image_width_px = image.shape[:2]
+                figure_width = 8.27
+                left_margin = 0.50
+                right_margin = 0.50
+                top_margin = 0.25
+                bottom_margin = 0.25
+                gap_after_title = 0.08
+                gap_after_problems = 0.12
+                available_image_width = figure_width - left_margin - right_margin
+                maximum_image_height = 7.0
+                scale = min(available_image_width / image_width_px, maximum_image_height / image_height_px)
+                display_width = image_width_px * scale
+                display_height = image_height_px * scale
+                title_block_height = max(0.65, 0.30 * len(title_lines) + 0.10)
+                problem_block_height = max(0.35, 0.23 * len(problem_lines) + 0.10)
+                figure_height = (top_margin + title_block_height + gap_after_title + problem_block_height +
+                                 gap_after_problems + display_height + bottom_margin)
+                figure = plt.figure(figsize=(figure_width, figure_height))
+
+                # Title and description
+                title_y = 1.0 - top_margin / figure_height
+                figure.text(0.5, title_y, title_text, ha="center", va="top", fontsize=11, fontweight="bold", linespacing=1.15)
+                problems_y = 1.0 - (top_margin + title_block_height + gap_after_title) / figure_height
+                figure.text(left_margin / figure_width, problems_y, problems_text, ha="left", va="top", fontsize=9.5,
+                            fontweight="normal", linespacing=1.20)
+
+                # Show image
+                image_left = (figure_width - display_width) / (2.0 * figure_width)
+                image_bottom = (bottom_margin / figure_height)
+                image_axis = figure.add_axes([image_left, image_bottom, display_width / figure_width,
+                                              display_height / figure_height])
+                if image.ndim == 2:
+                    image_axis.imshow(image, cmap="gray")
+                else:
+                    image_axis.imshow(image)
+                image_axis.axis("off")
+                pdf.savefig(figure)
+                plt.close(figure)
+                number_of_pages += 1
+        if number_of_pages == 0:
+            if os.path.exists(output_pdf_path):
+                os.remove(output_pdf_path)
+            raise RuntimeError("No PDF pages were created. Check that the CSV identifiers match self.train_data.dicom_projection_instances.")
+
+        # Save unmatched identifiers
+        if skipped_instances:
+            skipped_path = os.path.splitext(output_pdf_path)[0] + "_skipped.csv"
+            DataFrame({"skipped_instance": skipped_instances}).to_csv(skipped_path, index=False)
+            print(f"Skipped {len(skipped_instances)} instances.")
+            print("Skipped-instance list:", skipped_path)
+        print("Manual-review PDF created:", output_pdf_path)
+        print("PDF pages:", number_of_pages)
+
+        return number_of_pages, skipped_instances
 
 
 # Main
@@ -1426,7 +1715,7 @@ if __name__ == "__main__":
     NetworkTrainer.set_seed(seed1)
 
     # Define variables
-    working_dir1 = "./../../"
+    # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "cropped_projection_resnext50_simpler"
     net_type1 = NetType.BASE_RES_NEXT50
@@ -1434,7 +1723,7 @@ if __name__ == "__main__":
     preprocess_inputs1 = False
     trial_n1 = 16
     val_epochs1 = 10
-    use_cuda1 = False
+    use_cuda1 = True
     assess_calibration1 = True
     show_test1 = True
     projection_dataset1 = True
@@ -1446,13 +1735,14 @@ if __name__ == "__main__":
     weight_loss1 = False
     dynamic_under_sampling1 = True
     transpose1 = False
-    equalize_images1 = True
+    equalize_images1 = False
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
     train_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_training",
                                            selected_segments=selected_segments1,
-                                           selected_projection=selected_projection1)
+                                           selected_projection=selected_projection1,
+                                           removable_instances_txt="removable_instances_training.txt")
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
                                          selected_segments=selected_segments1, selected_projection=selected_projection1)
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
@@ -1462,7 +1752,7 @@ if __name__ == "__main__":
 
     # Define trainer
     net_params1 = {"n_conv_segment_neurons": 0, "n_conv_view_neurons": 1024, "n_conv_segment_layers": 0,
-                   "n_conv_view_layers": 2, "kernel_size": 7, "n_fc_layers": 4, "optimizer": "SGD",
+                   "n_conv_view_layers": 0, "kernel_size": 7, "n_fc_layers": 4, "optimizer": "SGD",
                    "lr_last": 0.00001, "lr_second_last_factor": 71, "batch_size": 32, "p_dropout": 0.9,
                    "use_batch_norm": False}
     trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
@@ -1477,9 +1767,9 @@ if __name__ == "__main__":
     #                                zero_shot=True)
 
     # Train model
-    '''trainer1.train(show_epochs=True)
-    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)'''
+    # trainer1.train(show_epochs=True)
+    # trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+    #                                assess_calibration=assess_calibration1)
     
     # Evaluate model
     print()
@@ -1491,5 +1781,10 @@ if __name__ == "__main__":
                                    assess_calibration=assess_calibration1)'''
 
     # Clean labels with Cleanlab
-    records = train_data1.clean_labels_input()
-    lab, review_table, oof_pred_probs, features, issue_summary = trainer1.clean_labels(records=records, k=10, clean_epochs=200, seed=seed1, show=True)
+    records = val_data1.clean_labels_input()
+    lab, review_table, oof_pred_probs, features, issue_summary = trainer1.clean_labels(records=records,
+                                                                                       dataset=trainer1.val_data, k=10,
+                                                                                       clean_epochs=epochs1, seed=seed1,
+                                                                                       show=True)
+    number_of_pages, skipped = trainer1.create_cleanlab_review_pdf(removable_instances_path=trainer1.train_data.data_dir +
+                                                                                            "/removable_instances_training.txt")

@@ -14,6 +14,20 @@ class XrayProjectionDataset(XrayDataset):
         for i in range(len(self.dicom_instances)):
             segm, _ = super().__getitem__(i)
             self.dicom_projection_instances += [f"{self.dicom_instances[i]}_{j}" for j in range(len(segm))]
+        self.dicom_projection_instances = list(dict.fromkeys(self.dicom_projection_instances))
+        if hasattr(self, "wrong_label_instances") and self.wrong_label_instances is not None:
+            for patient in self.patient_data:
+                for s, segment in enumerate(patient.pt_data):
+                    for p, projection in enumerate(segment):
+                        if f"{patient.id:03}" + patient.segments[s].lower() + "_" + str(p) in self.wrong_label_instances:
+                            if projection[2] != "":
+                                tmp = ""
+                            else:
+                                tmp = projection[3].split("vertebra_name='")[-1].split("'")[0]
+                            segment[p] = (projection[0], projection[1], tmp, projection[3])
+        if hasattr(self, "removable_instances") and self.removable_instances is not None:
+            self.dicom_projection_instances = [instance for instance in self.dicom_projection_instances if instance not
+                                               in self.removable_instances]
         self.len = len(self.dicom_projection_instances)
 
     def __getitem__(self, ind):

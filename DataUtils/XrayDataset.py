@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 import torch
+from sqlalchemy.orm.loading import instances
 from torch.utils.data import Dataset
 from datetime import datetime
 from torchvision import transforms
@@ -37,7 +38,7 @@ class XrayDataset(Dataset):
     segment_dict_ita = {"C": "cervicale", "D": "dorsale", "L": "lombare", "S": "sacro-coccigeo"}
     classes = ["fracture absent", "fracture present"]
 
-    def __init__(self, working_dir):
+    def __init__(self, working_dir, removable_instances_txt=None):
         self.working_dir = working_dir
         self.data_dir = working_dir + self.data_fold
         self.results_dir = working_dir + self.results_fold
@@ -60,6 +61,10 @@ class XrayDataset(Dataset):
         self.validation_names = []
         self.test_pts = []
         self.test_names = []
+
+        if removable_instances_txt is not None:
+            with open(self.data_dir + removable_instances_txt, "r", encoding="utf-8") as f:
+                self.removable_instances = [line.strip() for line in f if line.strip()]
 
     def __getitem__(self, ind):
         if self.patient_data is None:
@@ -368,7 +373,7 @@ class XrayDataset(Dataset):
         ind = self.dicom_instances.index(name)
         return self.__getitem__(ind)
 
-    def complement_with_extra_data(self, extra_dataset_type, only_extra=False):
+    def complement_with_extra_data(self, extra_dataset_type, only_extra=False, cropping_ref_path=None):
         dataset_name = extra_dataset_type.get_dataset_name()
         if extra_dataset_type != ExtraDatasetType.CROPPED:
             sub_fold = self.extra_data_fold
@@ -546,7 +551,12 @@ class XrayDataset(Dataset):
             self.patient_data = new_patient_data
 
         else:
-            cropping_ref = pd.read_csv(dataset_path + "pooled_cropping_ref.csv")
+            if cropping_ref_path is None:
+                cropping_ref_path = dataset_path + "pooled_cropping_ref.csv"
+            else:
+                dataset_path = cropping_ref_path
+                cropping_ref_path += "cropping_ref.csv"
+            cropping_ref = pd.read_csv(cropping_ref_path)
             new_patient_data = self.patient_data.copy()
             for i, patient in enumerate(self.patient_data):
                 new_pt_data = []
@@ -572,7 +582,7 @@ class XrayDataset(Dataset):
 
     @staticmethod
     def load_dataset(working_dir, dataset_name, set_type=None, s3=None, selected_segments=None,
-                     selected_projection=None, correct_mistakes=True):
+                     selected_projection=None, correct_mistakes=True, removable_instances_txt=None):
         file_path = working_dir + XrayDataset.data_fold + dataset_name + ".pt"
         file = open(file_path, "rb") if s3 is None else s3.open(file_path, "rb")
         dataset = pickle.load(file)
@@ -673,6 +683,24 @@ class XrayDataset(Dataset):
             dataset.results_dir = dataset.working_dir + dataset.results_fold
             dataset.preliminary_dir = dataset.results_dir + dataset.preliminary_fold
 
+        # Remove instances
+        dataset.removable_instances = []
+        dataset.wrong_label_instances = []
+        if removable_instances_txt is not None:
+            with open(dataset.data_dir + removable_instances_txt, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    normalized_line = line.casefold()
+                    marker = "cambiare etichetta"
+                    if marker in normalized_line:
+                        marker_index = normalized_line.index(marker)
+                        instance_name = line[:marker_index].rstrip(" ,;:-\t")
+                        dataset.wrong_label_instances.append(instance_name)
+                    else:
+                        dataset.removable_instances.append(line)
+
         return dataset
 
     def clean_labels_input(self):
@@ -680,8 +708,12 @@ class XrayDataset(Dataset):
         for patient in self.patient_data:
             for segment_idx, segment in enumerate(patient.pt_data):
                 for projection_idx, projection in enumerate(segment):
+                    instance = f"{patient.id:03d}" + f"{str(patient.segments[segment_idx]).lower()}"
+                    if hasattr(self, "removable_instances"):
+                        if (instance + "_" + str(projection_idx)) in self.removable_instances:
+                            continue
                     proj_type, image, label, _ = projection
-                    records.append({"dicom_instance": f"{patient.id:03d}" + f"{str(patient.segments[segment_idx]).lower()}",
+                    records.append({"dicom_instance": instance,
                                     "patient_id": patient.id, "projection_idx": projection_idx, "projection_id": proj_type, "image": image,
                                     "label": int(label != "")})
         labels = np.asarray([record["label"] for record in records], dtype=np.int64)
@@ -772,7 +804,7 @@ if __name__ == "__main__":
     # dataset1.count_data()
 
     # Load an already split datasets
-    dataset_name1 = "cropped_xray_dataset_training"
+    dataset_name1 = "xray_dataset_training"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
                                         selected_projection=None)
 
@@ -785,10 +817,12 @@ if __name__ == "__main__":
 
     # Extend training set
     only_extra1 = False
-    extra_dataset_types1 = [ExtraDatasetType.AUGMENT]
-    '''for extra_dataset_type1 in extra_dataset_types1:
+    cropping_ref_path1 = dataset1.working_dir + "yolo_dir/results/yolo_tune/pred/" + dataset1.set_type.value + "/vertebrae/"
+    extra_dataset_types1 = [ExtraDatasetType.CROPPED]
+    for extra_dataset_type1 in extra_dataset_types1:
         print("Processing", extra_dataset_type1.value + "...")
-        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1)'''
+        dataset1.complement_with_extra_data(extra_dataset_type=extra_dataset_type1, only_extra=only_extra1,
+                                            cropping_ref_path=cropping_ref_path1)
 
     if only_extra1:
         dataset_name1 = extra_dataset_types1[0].get_dataset_name()
@@ -796,19 +830,20 @@ if __name__ == "__main__":
     else:
         addon1 = "cropped_" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "augmented_" \
             if ExtraDatasetType.AUGMENT in extra_dataset_types1 else "extended_"
+        if cropping_ref_path1 is not None:
+            addon1 = "yolo_" + addon1
     dataset1.data_dir = working_dir1 + XrayDataset.data_fold
     dataset1.results_dir = working_dir1 + XrayDataset.results_fold
     dataset1.preliminary_dir = dataset1.results_dir + XrayDataset.preliminary_fold
-    # dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
+    dataset1.store_dataset(dataset_name=addon1 + dataset_name1)
 
     print("-----------------------------------------------------------------------------------------------------------")
     addon2 = "Cropped" if ExtraDatasetType.CROPPED in extra_dataset_types1 else "Augmented" \
         if ExtraDatasetType.AUGMENT in extra_dataset_types1 else "Extended"
     print(addon2, "dataset:")
-    '''dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
+    dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon1 + dataset_name1,
                                         selected_segments=None, selected_projection=None, correct_mistakes=False)
 
-    dataset1.count_data(extra_dataset_types=extra_dataset_types1, only_extra_name=dataset_name1 if only_extra1 else None)'''
-
-    # Clean labels
+    dataset1.count_data(extra_dataset_types=extra_dataset_types1,
+                        only_extra_name=addon1 + dataset_name1 if only_extra1 or cropping_ref_path1 is not None else None)
 
