@@ -995,92 +995,113 @@ class NetworkTrainer:
             mcc = float(matthews_corrcoef(true_labels, predictions))
             return mean_loss, mcc, probabilities, true_labels
 
-        # Create patient-level folds
-        splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
-        splits = splitter.split(X=np.zeros(len(labels)), y=labels, groups=patient_ids)
-        oof_pred_probs = np.full(shape=(len(labels), 2), fill_value=np.nan, dtype=np.float32)
+        def predict_loaded_model(dataset):
+            model = self.net
+            model.set_cuda(cuda=self.use_cuda)
+            model.set_training(False)
+            loader, _ = self.load_data(dataset, shuffle=False)
+            all_probabilities = []
+            with torch.no_grad():
+                for batch in loader:
+                    outputs, _ = forward_batch(model, batch, dataset.set_type)
+                    probabilities = torch.sigmoid(outputs) if uses_logits else torch.clamp(outputs, min=1e-7,
+                                                                                           max=1.0 - 1e-7)
+                    all_probabilities.append(probabilities.reshape(-1).cpu())
+            positive_probabilities = torch.cat(all_probabilities).numpy()
+            pred_probs = np.stack((1.0 - positive_probabilities, positive_probabilities), axis=1).astype(np.float32)
+            return pred_probs
 
-        # Train model for each fold
-        for fold_idx, (train_indices, held_out_indices) in enumerate(splits, start=1):
-            NetworkTrainer.set_seed(seed + fold_idx)
-            train_indices = np.asarray(train_indices, dtype=np.int64)
-            held_out_indices = np.asarray(held_out_indices, dtype=np.int64)
-            train_labels = labels[train_indices]
-            held_out_labels = labels[held_out_indices]
-            if show:
-                print()
-                print(f"Cleanlab fold {fold_idx}/{k}")
-                print(f"  Train: {len(train_indices)} projections, " + f"{len(np.unique(patient_ids[train_indices]))} patients, "
-                      + f"{np.sum(train_labels == 1)} positive")
-                print(f"  Held out: {len(held_out_indices)} projections, " + f"{len(np.unique(patient_ids[held_out_indices]))} patients, "
-                      + f"{np.sum(held_out_labels == 1)} positive")
-            train_subset = Subset(dataset, train_indices.tolist())
-            held_out_subset = Subset(dataset, held_out_indices.tolist())
-            model = create_fresh_model()
-            optimizer = create_optimizer(model)
-            if uses_logits:
-                n_positive = int(np.sum(train_labels == 1))
-                n_negative = int(np.sum(train_labels == 0))
-                if n_positive == 0:
-                    raise ValueError(f"Fold {fold_idx} has no positive training examples.")
-                pos_weight = torch.tensor([n_negative / n_positive], dtype=torch.float32, device=self.device)
-                criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-            else:
-                criterion = nn.BCELoss().to(self.device)
-            standard_train_loader, _ = self.load_data(train_subset, shuffle=True)
-            for epoch in range(clean_epochs):
-                model.set_training(True)
-                if self.dynamic_under_sampling:
-                    positive_local_indices = np.flatnonzero(train_labels == 1)
-                    negative_local_indices = np.flatnonzero(train_labels == 0)
-                    if len(positive_local_indices) == 0:
-                        raise ValueError(f"Fold {fold_idx} contains no positive examples.")
-                    requested_negatives = (neg_proportion * len(positive_local_indices))
-                    n_sampled_negatives = min(requested_negatives, len(negative_local_indices))
-                    sampled_negative_indices = np.random.choice(negative_local_indices, size=n_sampled_negatives, replace=False)
-                    epoch_local_indices = np.concatenate([positive_local_indices, sampled_negative_indices])
-                    np.random.shuffle(epoch_local_indices)
-                    epoch_dataset = Subset(train_subset, epoch_local_indices.tolist())
-                    epoch_loader, _ = self.load_data(epoch_dataset, shuffle=True)
+        if dataset.set_type == SetType.TRAIN:
+            # Create patient-level folds
+            splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
+            splits = splitter.split(X=np.zeros(len(labels)), y=labels, groups=patient_ids)
+            oof_pred_probs = np.full(shape=(len(labels), 2), fill_value=np.nan, dtype=np.float32)
+
+            # Train model for each fold
+            for fold_idx, (train_indices, held_out_indices) in enumerate(splits, start=1):
+                NetworkTrainer.set_seed(seed + fold_idx)
+                train_indices = np.asarray(train_indices, dtype=np.int64)
+                held_out_indices = np.asarray(held_out_indices, dtype=np.int64)
+                train_labels = labels[train_indices]
+                held_out_labels = labels[held_out_indices]
+                if show:
+                    print()
+                    print(f"Cleanlab fold {fold_idx}/{k}")
+                    print(f"  Train: {len(train_indices)} projections, " + f"{len(np.unique(patient_ids[train_indices]))} patients, "
+                          + f"{np.sum(train_labels == 1)} positive")
+                    print(f"  Held out: {len(held_out_indices)} projections, " + f"{len(np.unique(patient_ids[held_out_indices]))} patients, "
+                          + f"{np.sum(held_out_labels == 1)} positive")
+                train_subset = Subset(dataset, train_indices.tolist())
+                held_out_subset = Subset(dataset, held_out_indices.tolist())
+                model = create_fresh_model()
+                optimizer = create_optimizer(model)
+                if uses_logits:
+                    n_positive = int(np.sum(train_labels == 1))
+                    n_negative = int(np.sum(train_labels == 0))
+                    if n_positive == 0:
+                        raise ValueError(f"Fold {fold_idx} has no positive training examples.")
+                    pos_weight = torch.tensor([n_negative / n_positive], dtype=torch.float32, device=self.device)
+                    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
                 else:
-                    epoch_loader = standard_train_loader
-                running_loss = 0.0
-                for batch in epoch_loader:
-                    optimizer.zero_grad(set_to_none=True)
-                    outputs, batch_labels = forward_batch(model, batch, SetType.TRAIN)
-                    if uses_logits:
-                        loss = criterion(outputs, batch_labels)
+                    criterion = nn.BCELoss().to(self.device)
+                standard_train_loader, _ = self.load_data(train_subset, shuffle=True)
+                for epoch in range(clean_epochs):
+                    model.set_training(True)
+                    if self.dynamic_under_sampling:
+                        positive_local_indices = np.flatnonzero(train_labels == 1)
+                        negative_local_indices = np.flatnonzero(train_labels == 0)
+                        if len(positive_local_indices) == 0:
+                            raise ValueError(f"Fold {fold_idx} contains no positive examples.")
+                        requested_negatives = (neg_proportion * len(positive_local_indices))
+                        n_sampled_negatives = min(requested_negatives, len(negative_local_indices))
+                        sampled_negative_indices = np.random.choice(negative_local_indices, size=n_sampled_negatives, replace=False)
+                        epoch_local_indices = np.concatenate([positive_local_indices, sampled_negative_indices])
+                        np.random.shuffle(epoch_local_indices)
+                        epoch_dataset = Subset(train_subset, epoch_local_indices.tolist())
+                        epoch_loader, _ = self.load_data(epoch_dataset, shuffle=True)
                     else:
-                        probabilities = torch.clamp(outputs, min=1e-7, max=1.0 - 1e-7)
-                        loss = criterion(probabilities, batch_labels)
-                    loss.backward()
-                    optimizer.step()
-                    running_loss += loss.detach().item()
-                if show and (epoch == 0 or epoch == clean_epochs - 1 or (epoch + 1) % 10 == 0):
-                    mean_loss = running_loss / len(epoch_loader)
-                    print(f"  Epoch {epoch + 1}/{clean_epochs}: " + f"loss={mean_loss:.5f}")
+                        epoch_loader = standard_train_loader
+                    running_loss = 0.0
+                    for batch in epoch_loader:
+                        optimizer.zero_grad(set_to_none=True)
+                        outputs, batch_labels = forward_batch(model, batch, SetType.TRAIN)
+                        if uses_logits:
+                            loss = criterion(outputs, batch_labels)
+                        else:
+                            probabilities = torch.clamp(outputs, min=1e-7, max=1.0 - 1e-7)
+                            loss = criterion(probabilities, batch_labels)
+                        loss.backward()
+                        optimizer.step()
+                        running_loss += loss.detach().item()
+                    if show and (epoch == 0 or epoch == clean_epochs - 1 or (epoch + 1) % 10 == 0):
+                        mean_loss = running_loss / len(epoch_loader)
+                        print(f"  Epoch {epoch + 1}/{clean_epochs}: " + f"loss={mean_loss:.5f}")
 
-            train_eval_loader, _ = self.load_data(train_subset, shuffle=False)
-            train_eval_loss, train_mcc, _, train_eval_labels = (evaluate_fold_model(model, train_eval_loader, criterion))
-            held_out_loader, _ = self.load_data(held_out_subset, shuffle=False)
-            held_out_loss, held_out_mcc, fold_positive_probabilities, evaluated_held_out_labels = evaluate_fold_model(model,
-                                                                                                                      held_out_loader,
-                                                                                                                      criterion)
-            if not np.array_equal(evaluated_held_out_labels, held_out_labels):
-                raise RuntimeError("Held-out labels are not aligned with predictions.")
+                train_eval_loader, _ = self.load_data(train_subset, shuffle=False)
+                train_eval_loss, train_mcc, _, train_eval_labels = (evaluate_fold_model(model, train_eval_loader, criterion))
+                held_out_loader, _ = self.load_data(held_out_subset, shuffle=False)
+                held_out_loss, held_out_mcc, fold_positive_probabilities, evaluated_held_out_labels = evaluate_fold_model(model,
+                                                                                                                          held_out_loader,
+                                                                                                                          criterion)
+                if not np.array_equal(evaluated_held_out_labels, held_out_labels):
+                    raise RuntimeError("Held-out labels are not aligned with predictions.")
+                if show:
+                    print(f"  Fold {fold_idx} complete:\n" + f"    train loss    = {train_eval_loss:.5f}\n" +
+                          f"    train MCC     = {train_mcc:.4f}\n" + f"    held-out loss = {held_out_loss:.5f}\n" +
+                          f"    held-out MCC  = {held_out_mcc:.4f}")
+
+                # Cleanlab probabilities
+                oof_pred_probs[held_out_indices, 1] = (fold_positive_probabilities)
+                oof_pred_probs[held_out_indices, 0] = (1.0 - fold_positive_probabilities)
+                del model
+                del optimizer
+                del criterion
+                if self.use_cuda:
+                    torch.cuda.empty_cache()
+        else:
             if show:
-                print(f"  Fold {fold_idx} complete:\n" + f"    train loss    = {train_eval_loss:.5f}\n" +
-                      f"    train MCC     = {train_mcc:.4f}\n" + f"    held-out loss = {held_out_loss:.5f}\n" +
-                      f"    held-out MCC  = {held_out_mcc:.4f}")
-
-            # Cleanlab probabilities
-            oof_pred_probs[held_out_indices, 1] = (fold_positive_probabilities)
-            oof_pred_probs[held_out_indices, 0] = (1.0 - fold_positive_probabilities)
-            del model
-            del optimizer
-            del criterion
-            if self.use_cuda:
-                torch.cuda.empty_cache()
+                print(f"\nUsing the original model to evaluate the {dataset.set_type.value} set...")
+            oof_pred_probs = predict_loaded_model(dataset)
 
         # Validate the complete OOF probability matrix
         if not np.all(np.isfinite(oof_pred_probs)):
@@ -1096,7 +1117,7 @@ class NetworkTrainer:
                                                                                   oof_pred_probs=oof_pred_probs,
                                                                                   output_dir=output_dir,
                                                                                   feature_layer_ind=feature_layer_ind,
-                                                                                  show=show))
+                                                                                  show=show, dataset=dataset))
         return lab, full_report, oof_pred_probs, features, issue_summary,
 
     def extract_features_from_loaded_model(self, dataset=None, feature_layer_ind=-1, show=False):
@@ -1174,8 +1195,11 @@ class NetworkTrainer:
             print("Feature memory: %.2f MB" % (features.nbytes / 1024 ** 2))
         return features, selected_name
 
-    def run_cleanlab_full_audit(self, records_df, labels, oof_pred_probs, output_dir, feature_layer_ind=-1,
-                                show=False):
+    def run_cleanlab_full_audit(self, records_df, labels, oof_pred_probs, output_dir, feature_layer_ind=-1, show=False,
+                                dataset=None):
+        if dataset is None:
+            dataset = self.train_data
+
         requested_issues = ["null", "label", "outlier", "near_duplicate", "non_iid", "class_imbalance",
                             "underperforming_group", "data_valuation"]
         os.makedirs(output_dir, exist_ok=True)
@@ -1190,7 +1214,7 @@ class NetworkTrainer:
         gc.collect()
         if self.use_cuda:
             torch.cuda.empty_cache()
-        features, selected_feature_layer = self.extract_features_from_loaded_model(dataset=self.train_data,
+        features, selected_feature_layer = self.extract_features_from_loaded_model(dataset=dataset,
                                                                                    feature_layer_ind=feature_layer_ind,
                                                                                    show=show)
         if features.shape[0] != len(labels):
@@ -1781,10 +1805,12 @@ if __name__ == "__main__":
                                    assess_calibration=assess_calibration1)'''
 
     # Clean labels with Cleanlab
-    records = val_data1.clean_labels_input()
+    dataset1 = trainer1.val_data
+    records = dataset1.clean_labels_input()
     lab, review_table, oof_pred_probs, features, issue_summary = trainer1.clean_labels(records=records,
-                                                                                       dataset=trainer1.val_data, k=10,
+                                                                                       dataset=dataset1, k=10,
                                                                                        clean_epochs=epochs1, seed=seed1,
                                                                                        show=True)
-    number_of_pages, skipped = trainer1.create_cleanlab_review_pdf(removable_instances_path=trainer1.train_data.data_dir +
-                                                                                            "/removable_instances_training.txt")
+    number_of_pages, skipped = trainer1.create_cleanlab_review_pdf(removable_instances_path=dataset1.data_dir +
+                                                                                            "/removable_instances_" +
+                                                                                            dataset1.set_type.value + ".txt")
