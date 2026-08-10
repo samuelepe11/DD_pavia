@@ -144,6 +144,7 @@ class MapGenerator:
         original_imgs = []
         masks = []
         data_names_tmp = []
+        box_coords = []
         for i, instance in enumerate(data):
             item, extra = instance
             projection_type = []
@@ -169,6 +170,16 @@ class MapGenerator:
                     data_names.append(segm_names[i] + "_" + str(j))
                 else:
                     data_names_tmp.append(extra_info.split("file_name=")[-1].split(",")[0][1:-5])
+
+                # Save ranges
+                tmp = extra_info.split("x_min=")[1].split(", x_max=")
+                x_min = int(tmp[0])
+                tmp = tmp[1].split(", y_min=")
+                x_max = int(tmp[0])
+                tmp = tmp[1].split(", y_max=")
+                y_min = int(tmp[0])
+                y_max = int(tmp[1].split(", fracture_present")[0])
+                box_coords.append({"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max})
 
                 # Get masks for visualization
                 if not self.is_cropped:
@@ -232,8 +243,10 @@ class MapGenerator:
                                                                results_dir_path=cam_dir + data_names_tmp[i] + "/")
 
                     with open(cam_dir + data_names_tmp[i] + "/" + "model_predictions.txt", "w", encoding="utf-8") as f:
+                        f.write(f"x_min: {box_coords[i]['x_min']}\nx_max: {box_coords[i]['x_max']}\n"
+                                f"y_min: {box_coords[i]['y_min']}\ny_max: {box_coords[i]['y_max']}\n")
                         for k, v in prob.items():
-                            f.write(f"{k[-1]}: {v[0]:.5f}\n")
+                            f.write(f"prob{k[-1]}: {v[0]:.5f}\n")
 
         return cams_dict, predicted_probs_dict, bar_ranges_dict
 
@@ -585,9 +598,9 @@ if __name__ == "__main__":
     set_type1 = SetType.TEST
     target_classes1 = [0, 1]
     explainer_types1 = ["Grad-CAM"]
-    target_layers1 = ["feature_extractor.features.7.1.conv3"]
-    desired_instances1 = ["308c", "370s", "093l", "354d"]
-    '''cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
+    target_layers1 = ["feature_extractor.features.7.2.conv3"]
+    desired_instances1 = ["354d"]#, "370s", "308c", "093l"]
+    cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
                                                                              target_classes=target_classes1,
                                                                              explainer_types=explainer_types1,
                                                                              target_layers=target_layers1,
@@ -597,8 +610,8 @@ if __name__ == "__main__":
     generator1.get_overlapped_radiography(cams_dict1, predicted_probs_dict1, bar_ranges_dict1, set_type=set_type1,
                                           target_classes=target_classes1, explainer_types=explainer_types1,
                                           target_layers=target_layers1, desired_instances=desired_instances1,
-                                          box_thickness=0, blur=True)'''
+                                          box_thickness=0, blur=True)
 
     # Textual explainer
-    generator1.get_textual_explainer()
-    generator1.textually_explain(set_type1, desired_instances1)
+    '''generator1.get_textual_explainer()
+    generator1.textually_explain(set_type1, desired_instances1)'''

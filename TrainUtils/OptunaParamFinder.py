@@ -161,10 +161,10 @@ class OptunaParamFinder:
 
         # Sample parameters
         params = {
-            "n_conv_segment_neurons": 0, # np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 5, 11, step=1))),
-            "n_conv_view_neurons": 0, # np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 5, 11, step=1))),
-            "n_conv_segment_layers": 0, # int(trial.suggest_int("n_conv_segment_layers", 1, 3, step=1)),
-            "n_conv_view_layers": 0, # int(trial.suggest_int("n_conv_view_layers", 0, 3, step=1)),
+            "n_conv_segment_neurons": np.round(2 ** (trial.suggest_int("n_conv_segment_neurons", 5, 11, step=1))),
+            "n_conv_view_neurons": np.round(2 ** (trial.suggest_int("n_conv_view_neurons", 5, 11, step=1))),
+            "n_conv_segment_layers": int(trial.suggest_int("n_conv_segment_layers", 0, 3, step=1)),
+            "n_conv_view_layers": int(trial.suggest_int("n_conv_view_layers", 0, 3, step=1)),
             "kernel_size": int(trial.suggest_int("kernel_size", 3, 7, step=2)),
             "n_fc_layers": int(trial.suggest_int("n_fc_layers", 1, 3, step=1)),
             "optimizer": trial.suggest_categorical("optimizer", ["RMSprop", "Adam", "SGD"]),
@@ -361,7 +361,7 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize_dataclean"
+    model_name1 = "cropped_projection_resnext50_transpose_equalize_dataclean"
     selected_segments1 = None
     selected_projection1 = None
     net_type1 = NetType.BASE_RES_NEXT50
