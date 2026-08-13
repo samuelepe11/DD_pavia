@@ -1408,9 +1408,11 @@ class NetworkTrainer:
         return lab, review_table, features, summary_table
 
     def create_cleanlab_review_pdf(self, manual_review_path=None, output_pdf_path=None, include_dataset_level_issues=True,
-                                   max_pages=None, removable_instances_path=None):
+                                   max_pages=None, removable_instances_path=None, dataset=None):
         # Paths
-        cleanlab_dir = os.path.join(self.results_dir, "cleanlab")
+        if dataset is None:
+            dataset = self.train_data
+        cleanlab_dir = os.path.join(self.results_dir, dataset.set_type.value + "_cleanlab")
         if manual_review_path is None:
             manual_review_path = os.path.join(cleanlab_dir, "cleanlab_full_manual_review.csv")
         if output_pdf_path is None:
@@ -1500,9 +1502,9 @@ class NetworkTrainer:
             flagged_df = flagged_df.head(int(max_pages))
 
         # Projection identifier lookup
-        if not hasattr(self.train_data, "dicom_projection_instances"):
-            raise AttributeError("self.train_data does not contain 'dicom_projection_instances'.")
-        projection_instances = [str(projection_identifier) for projection_identifier in self.train_data.dicom_projection_instances]
+        if not hasattr(dataset, "dicom_projection_instances"):
+            raise AttributeError("dataset does not contain 'dicom_projection_instances'.")
+        projection_instances = [str(projection_identifier) for projection_identifier in dataset.dicom_projection_instances]
         projection_lookup = {}
         duplicate_identifiers = []
         for dataset_index, projection_identifier in enumerate(projection_instances):
@@ -1591,7 +1593,7 @@ class NetworkTrainer:
             return {0: "no fracture", 1: "fracture"}.get(value, str(value))
 
         def get_image(dataset_index):
-            x, _ = self.train_data.__getitem__(dataset_index)
+            x, _ = dataset.__getitem__(dataset_index)
             if len(x) == 0:
                 raise RuntimeError(f"Empty projection data at index {dataset_index}.")
             image = x[0][1]
@@ -1718,7 +1720,7 @@ class NetworkTrainer:
         if number_of_pages == 0:
             if os.path.exists(output_pdf_path):
                 os.remove(output_pdf_path)
-            raise RuntimeError("No PDF pages were created. Check that the CSV identifiers match self.train_data.dicom_projection_instances.")
+            raise RuntimeError("No PDF pages were created. Check that the CSV identifiers match dataset.dicom_projection_instances.")
 
         # Save unmatched identifiers
         if skipped_instances:
@@ -1741,11 +1743,11 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    model_name1 = "cropped_projection_resnext50_simpler"
+    model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize"
     net_type1 = NetType.BASE_RES_NEXT50
     epochs1 = 200
     preprocess_inputs1 = False
-    trial_n1 = 16
+    trial_n1 = 2
     val_epochs1 = 10
     use_cuda1 = True
     assess_calibration1 = True
@@ -1768,10 +1770,12 @@ if __name__ == "__main__":
                                            selected_projection=selected_projection1,
                                            removable_instances_txt="removable_instances_training.txt")
     val_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_validation",
-                                         selected_segments=selected_segments1, selected_projection=selected_projection1)
+                                         selected_segments=selected_segments1, selected_projection=selected_projection1,
+                                         removable_instances_txt="removable_instances_validation.txt")
     test_data1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=addon + "xray_dataset_test",
                                           selected_segments=selected_segments1,
-                                          selected_projection=selected_projection1)
+                                          selected_projection=selected_projection1,
+                                          removable_instances_txt="removable_instances_test.txt")
     # bicocca_only_dataset = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name="DD_bicocca")
 
     # Define trainer
@@ -1801,11 +1805,11 @@ if __name__ == "__main__":
                                          use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1,
                                          is_cropped=is_cropped1)
-    '''trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
-                                   assess_calibration=assess_calibration1)'''
+    trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
+                                   assess_calibration=assess_calibration1)
 
     # Clean labels with Cleanlab
-    dataset1 = trainer1.val_data
+    '''dataset1 = trainer1.test_data
     records = dataset1.clean_labels_input()
     lab, review_table, oof_pred_probs, features, issue_summary = trainer1.clean_labels(records=records,
                                                                                        dataset=dataset1, k=10,
@@ -1813,4 +1817,5 @@ if __name__ == "__main__":
                                                                                        show=True)
     number_of_pages, skipped = trainer1.create_cleanlab_review_pdf(removable_instances_path=dataset1.data_dir +
                                                                                             "/removable_instances_" +
-                                                                                            dataset1.set_type.value + ".txt")
+                                                                                            dataset1.set_type.value + ".txt",
+                                                                   dataset=dataset1)'''

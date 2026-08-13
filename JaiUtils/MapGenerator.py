@@ -10,6 +10,7 @@ import pandas as pd
 import cv2
 import matplotlib.pyplot as plt
 import re
+import gc
 from sklearn.metrics import f1_score, matthews_corrcoef
 from signal_grad_cam import TorchCamBuilder
 from flatbuffers.flexbuffers import Object
@@ -29,6 +30,7 @@ class MapGenerator:
         # Initialize attributes
         self.working_dir = working_dir
         self.jai_dir = working_dir + XrayDataset.results_fold + XrayDataset.jai_fold
+        self.data_dir = working_dir + XrayDataset.data_fold
         self.model_name = model_name
         if model_name not in os.listdir(self.jai_dir):
             os.mkdir(self.jai_dir + model_name)
@@ -150,7 +152,7 @@ class MapGenerator:
             projection_type = []
             resized_img = []
             instance_name = f"{extra[0]:03d}" + extra[1].lower()
-            if instance_name not in desired_instances:
+            if desired_instances is not None and instance_name not in desired_instances:
                 continue
             extras1.append(extra[1])
             extras.append(extra)
@@ -212,15 +214,62 @@ class MapGenerator:
         extra_inputs_list = [extras1, projection_types, True]
 
         # Get CAMs
-        cams_dict, predicted_probs_dict, bar_ranges_dict = self.cam_builder.get_cam(data_list, data_labels,
-                                                                                    target_classes, explainer_types,
-                                                                                    target_layers, softmax_final=False,
-                                                                                    data_names=data_names_tmp,
-                                                                                    results_dir_path=cam_dir,
-                                                                                    extra_preprocess_inputs_list=
-                                                                                    extra_preprocess_inputs_list,
-                                                                                    extra_inputs_list=extra_inputs_list,
-                                                                                    data_shape_list=data_shape_list)
+        max_batch_size = 32
+        if desired_instances is not None and len(desired_instances) < max_batch_size:
+            cams_dict, predicted_probs_dict, bar_ranges_dict = self.cam_builder.get_cam(data_list, data_labels,
+                                                                                        target_classes, explainer_types,
+                                                                                        target_layers, softmax_final=False,
+                                                                                        data_names=data_names_tmp,
+                                                                                        results_dir_path=cam_dir,
+                                                                                        extra_preprocess_inputs_list=
+                                                                                        extra_preprocess_inputs_list,
+                                                                                        extra_inputs_list=extra_inputs_list,
+                                                                                        data_shape_list=data_shape_list)
+        else:
+            cams_dict = {}
+            predicted_probs_dict = {}
+            bar_ranges_dict = {}
+            for start_idx in range(0, len(data_list), max_batch_size):
+                end_idx = min(start_idx + max_batch_size, len(data_list))
+                print(f"\nGenerating CAMs for {start_idx}:{end_idx}/{len(data_list)}\n")
+                data_list_batch = data_list[start_idx:end_idx]
+                data_labels_batch = data_labels[start_idx:end_idx]
+                data_names_batch = data_names_tmp[start_idx:end_idx]
+                extra_preprocess_inputs_batch = extra_preprocess_inputs_list[start_idx:end_idx]
+                extra_inputs_batch = [extra_inputs_list[0][start_idx:end_idx], extra_inputs_list[1][start_idx:end_idx], extra_inputs_list[2]]
+                data_shape_batch = data_shape_list[start_idx:end_idx]
+                cams_tmp, predicted_probs_tmp, bar_ranges_tmp = self.cam_builder.get_cam(data_list_batch,
+                                                                                         data_labels_batch,
+                                                                                         target_classes,
+                                                                                         explainer_types, target_layers,
+                                                                                         softmax_final=False,
+                                                                                         data_names=data_names_batch,
+                                                                                         results_dir_path=cam_dir,
+                                                                                         extra_preprocess_inputs_list=extra_preprocess_inputs_batch,
+                                                                                         extra_inputs_list=extra_inputs_batch,
+                                                                                         data_shape_list=data_shape_batch)
+                for k in cams_tmp.keys():
+                    if k not in cams_dict.keys():
+                        cams_dict.update({k: cams_tmp[k]})
+                        predicted_probs_dict.update({k: predicted_probs_tmp[k]})
+                        bar_ranges_dict.update({k: bar_ranges_tmp[k]})
+                    else:
+                        cams_dict.update({k: cams_dict[k] + cams_tmp[k]})
+                del data_list_batch, data_labels_batch, data_names_batch, extra_preprocess_inputs_batch, extra_inputs_batch, data_shape_batch
+                del cams_tmp, predicted_probs_tmp, bar_ranges_tmp
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        # Store raw images
+        for i, data_name in enumerate(data_names_tmp):
+            if "raw_image.png" not in os.listdir(cam_dir + data_name):
+                plt.figure()
+                plt.imshow(original_imgs[i], "gray")
+                plt.xticks([], [])
+                plt.yticks([], [])
+                plt.savefig(cam_dir + data_name + "/raw_image.png", format="png", bbox_inches="tight",
+                            pad_inches=0, dpi=500)
 
         # Display overlapped
         comparison_classes = target_classes
@@ -270,6 +319,9 @@ class MapGenerator:
             for comparison_algorithm in explainer_types:
                 for comparison_layer in target_layers:
                     cam_key = comparison_algorithm + "_" + comparison_layer + "_class" + str(comparison_class)
+                    iou_list = []
+                    iogt_list = []
+                    counter = 0
                     for data_name in data_names:
                         original_item, _ = full_dataset.get_data_from_name(data_name)
                         frac_labels = []
@@ -306,9 +358,10 @@ class MapGenerator:
                                         box["y_max"] = new_max
                                     boxes.append(box)
 
-                                    max_val = bar_ranges_dict[cam_key][1][0][0]
-                                    min_val = bar_ranges_dict[cam_key][0][0][0]
-                                    vertebra_cam = cams_dict[cam_key][cropped_extra[2]] / 255.0 * (max_val - min_val) + min_val
+                                    max_val = bar_ranges_dict[cam_key][1][counter][0]
+                                    min_val = bar_ranges_dict[cam_key][0][counter][0]
+                                    vertebra_cam = cams_dict[cam_key][counter] / 255.0 * (max_val - min_val) + min_val
+                                    counter += 1
                                     for row in range(box["y_min"], (box["y_max"] + 1)):
                                         for col in range(box["x_min"], (box["x_max"] + 1)):
                                             full_h, full_w = full_cam.shape[:2]
@@ -337,14 +390,14 @@ class MapGenerator:
                                     original_img_tmp[y_min:y_max + 1, x_max - box_thickness + 1:x_max + 1] = colors[i]
 
                             # Display overlapped
-                            prob = {cam_key: np.mean(predicted_probs_dict[cam_key])[np.newaxis]}
+                            '''prob = {cam_key: np.mean(predicted_probs_dict[cam_key])[np.newaxis]}'''
                             full_cam, bar_ranges = self.cam_builder._CamBuilder__normalize_cams(full_cam[np.newaxis, :, :], True, False)
                             full_cam = full_cam[0]
                             if blur:
                                 full_cam = cv2.GaussianBlur(full_cam, (101, 101), 0)
-                            cam = {cam_key: [full_cam]}
+                            '''cam = {cam_key: [full_cam]}
                             bar = {cam_key: (bar_ranges[0][0][0], bar_ranges[1][0][0])}
-                            data_label = int(any([frac_label != "" for frac_label in frac_labels]))
+                            data_label = int(any([frac_label != "" for frac_label in frac_labels]))'''
                             data_name_tmp = data_name + "_proj" + str(j)
                             if data_name_tmp not in os.listdir(cam_dir):
                                 os.mkdir(cam_dir + data_name_tmp)
@@ -354,7 +407,27 @@ class MapGenerator:
                                 plt.imshow(original_img_tmp)
                                 plt.xticks([], [])
                                 plt.yticks([], [])
-                                plt.savefig(cam_dir + data_name_tmp + "/raw_image.png", format="png", bbox_inches="tight", pad_inches=0, dpi=500)
+                                plt.savefig(cam_dir + data_name_tmp + "/raw_image.png", format="png",
+                                            bbox_inches="tight", pad_inches=0, dpi=500)
+
+                            if "xray_dataset_" + set_type.value + "_masks" in os.listdir(self.data_dir):
+                                gt_mask = cv2.imread(self.data_dir + "xray_dataset_" + set_type.value +
+                                                     "_masks/gt_masks/" + data_name + "/projection" + str(j) + ".jpg",
+                                                     cv2.IMREAD_GRAYSCALE)
+                                gt_mask = cv2.resize(gt_mask, (original_img_tmp.shape[1], original_img_tmp.shape[0]),
+                                                     interpolation=cv2.INTER_NEAREST)
+                                gt_mask = (gt_mask >= 128).astype(np.uint8) * 255
+                                if "gt_image.png" not in os.listdir(cam_dir + data_name_tmp + "/"):
+                                    plt.figure()
+                                    plt.imshow(original_img_tmp)
+                                    map = plt.imshow(gt_mask, cmap="inferno", norm=None)
+                                    map.set_alpha(0.3)
+                                    plt.xticks([], [])
+                                    plt.yticks([], [])
+                                    plt.savefig(cam_dir + data_name_tmp + "/gt_image.png", format="png",
+                                                bbox_inches="tight", pad_inches=0, dpi=500)
+                            else:
+                                gt_mask = None
 
                             plt.figure()
                             plt.imshow(original_img_tmp)
@@ -375,38 +448,81 @@ class MapGenerator:
                                                                        bar_ranges_dict=bar, fig_size=(20, 12),
                                                                        results_dir_path=cam_dir + data_name_tmp + "/")'''
 
+                            # Compute validation metrics
+                            if gt_mask is not None:
+                                m = np.mean(full_cam)
+                                s = np.std(full_cam)
+                                full_cam_bin = full_cam >= m + s
+                                intersection = np.logical_and(gt_mask, full_cam_bin).sum()
+                                union = np.logical_or(gt_mask, full_cam_bin).sum()
+                                gt_area = gt_mask.sum() / 255
+                                iou_list.append(intersection / union if union > 0 else 0.0)
+                                iogt_list.append(intersection / gt_area if gt_area > 0 else 0.0)
+
+                    # Store final IoU and IoGT
+                    with open(cam_dir + "/" + "validation.txt", "w", encoding="utf-8") as f:
+                        f.write(f"Class = {comparison_class}, algorithm = {comparison_algorithm}, layer = {comparison_layer}\n")
+                        f.write(f"IoU = {np.mean(iou_list)}\n")
+                        f.write(f"IoGT = {np.mean(iogt_list)}\n\n")
+
     def get_textual_explainer(self):
-        role = ("Sei un radiologo muscoloscheletrico incaricato di analizzare una porzione di radiografia vertebrale e "
-                "di ricavare quali sono gli elementi a favore di una classe proposta (frattura assente o frattura "
-                "presente) tra quelli evidenziati da un modello AI tramite una mappa di calore con colorazione inferno "
-                "dove i colori scuri (nero o grigio) identificano le parti di minore interesse mentre i colori brillanti"
-                " (giallo o arancio) identificano le parti di maggiore importanza secondo il modello.")
-        model = Ollama(id="qwen3-vl:4b", host="http://localhost:11434",
-                       options={"temperature": 0.1})
+        role = ("Sei un sistema di supporto alla decisione medica esperto nella valutazione di radiografie della colonna"
+                " vertebrale. Il tuo compito è trasformare le regioni selezionate da un classificatore in una breve "
+                "argomentazione testuale rivolta a un medico, descrivendo esclusivamente caratteristiche anatomiche o "
+                "morfologiche realmente osservabili in un frammento di immagine radiografica originale e valutandole "
+                "come evidenza a favore della classe proposta. L'argomentazione deve essere persuasiva attraverso la "
+                "precisione e la concretezza delle osservazioni, senza amplificarne il significato e senza introdurre "
+                "reperti non visibili.")
+        model = Ollama(id="qwen3-vl:4b", host="http://localhost:11434", options={"temperature": 0.1})
         instructions = [
-            "Rispondi esclusivamente in italiano.",
-            "Produci un unico paragrafo di massimo tre frasi.",
-            "Non utilizzare elenchi, titoli, numerazioni o formattazione Markdown.",
-            "Restituisci soltanto la risposta finale e non mostrare il ragionamento seguito né riassumi i prompt forniti.",
-            "Nella risposta non utilizzare mai le parole heatmap, mappa, colormap, giallo, arancione, colore, intelligenza artificiale, modello o classificatore.",
-            "Considera esclusivamente le regioni maggiormente selezionate dalla mappa di calore (in giallo/arancione brillante) nella parte radiografica dell'immagine.",
-            "Ignora completamente titolo, nome del file, etichette, percentuali, barra laterale, valori numerici e qualsiasi testo visibile nell'immagine.",
-            "Non identificare il livello vertebrale o il tratto spinale.",
-            "Descrivi inizialmente la posizione relativa della regione selezionata dalla mappa di calore usando termini come superiore, inferiore, centrale, periferica, anteriore o posteriore.",
-            "Non chiamare una struttura piatto vertebrale, corticale, parete vertebrale o peduncolo quando la sua identificazione è incerta.",
-            "Non usare la semplice assenza di un'anomalia visibile come prova della classe frattura assente.",
-            "Valuta l'associazione tra un fenoeno e la classe proposta scegliendo esclusivamente una delle seguenti conclusioni: supporta, supporta parzialmente, è insufficiente oppure contraddice.",
-            "Devi cercare necessariamente elementi favorevoli alla classe proposta.",
-            "La classe proposta è soltanto l'ipotesi da valutare per cui tu devi cercare evidenza visiva.",
-            "Non aggiungere informazioni cliniche, anatomiche o diagnostiche non direttamente osservabili.",
-            "Non fornire una diagnosi definitiva."]
+        "Rispondi esclusivamente in italiano.",
+        "Produci un unico paragrafo di massimo cinque frasi.",
+        "Non utilizzare elenchi, titoli, numerazioni o formattazione Markdown.",
+        "Restituisci soltanto la risposta finale e non mostrare il ragionamento seguito, i passaggi intermedi o un riassunto delle istruzioni ricevute.",
+        "Nella risposta finale non utilizzare mai le parole heatmap, mappa, colormap, Grad-CAM, giallo, arancione, grigio, nero, colore, intelligenza artificiale, modello o classificatore.",
+        "Le tre immagini devono essere interpretate sempre secondo il loro ordine e secondo la funzione assegnata a ciascuna di esse.",
+        "Usa l'IMMAGINE 2 esclusivamente per individuare posizione, estensione e importanza relativa delle regioni maggiormente selezionate.",
+        "Usa l'IMMAGINE 3 esclusivamente per associare le regioni individuate nell'IMMAGINE 2 alle strutture anatomiche corrispondenti nell'immagine radiografica.",
+        "Usa l'IMMAGINE 1 come riferimento finale per verificare che ogni caratteristica anatomica o morfologica descritta nella risposta sia realmente visibile.",
+        "Qualsiasi caratteristica anatomica o morfologica riportata nella risposta deve essere direttamente verificabile nell'IMMAGINE 1.",
+        "Non interpretare la sola intensità o estensione della regione selezionata come evidenza di frattura o assenza di frattura: essa indica esclusivamente quali regioni sono state considerate maggiormente rilevanti per la classe proposta.",
+        "Considera prioritariamente le regioni con maggiore intensità nell'IMMAGINE 2 e la loro corrispondenza anatomica nell'IMMAGINE 3.",
+        "Puoi utilizzare internamente le informazioni visive delle IMMAGINI 2 e 3 per localizzare le regioni selezionate, ma nella risposta finale devi descrivere esclusivamente la loro posizione anatomica e le caratteristiche radiografiche effettivamente visibili.",
+        "Ignora completamente titolo, nome del file, etichette, percentuali, barra laterale, valori numerici e qualsiasi testo visibile nelle immagini, soprattuto in IMMAGINI 2 e 3 dove un titolo e una colorbar sono sempre presenti.",
+        "Non utilizzare eventuale testo presente nelle immagini per determinare la classe, la diagnosi, la confidenza o il significato delle regioni selezionate.",
+        "Non identificare il livello vertebrale specifico o il tratto spinale.",
+        "Descrivi inizialmente la posizione relativa della regione selezionata utilizzando, quando appropriato, termini come superiore, inferiore, centrale, periferica, anteriore o posteriore.",
+        "Identifica una struttura anatomica specifica soltanto quando essa è chiaramente riconoscibile nell'IMMAGINE 1.",
+        "Non chiamare una struttura piatto vertebrale, corticale, parete vertebrale, peduncolo o altra struttura specifica quando la sua identificazione è incerta.",
+        "Non completare mentalmente strutture parzialmente rappresentate e non inferire la loro morfologia nelle porzioni non visibili.",
+        "Descrivi come regolare, conservata, continua o integra una struttura soltanto quando la caratteristica pertinente è chiaramente visualizzabile nell'IMMAGINE 1.",
+        "Non dichiarare la presenza di depressione, deformazione, cedimento, discontinuità, irregolarità corticale o altri segni di frattura se tali caratteristiche non sono chiaramente osservabili nell'IMMAGINE 1.",
+        "Per la classe 'frattura assente', descrivi una struttura come conservata, regolare, continua o integra soltanto se la caratteristica pertinente è chiaramente visualizzabile nell'IMMAGINE 1.",
+        "La classe proposta è un'ipotesi da sostenere attraverso l'evidenza visiva e non costituisce essa stessa una prova.",
+        "Se il collegamento tra la regione selezionata e un reperto morfologico favorevole alla classe proposta è debole, indiretto, parziale o non completamente valutabile, non inventare ulteriori caratteristiche e utilizza la conclusione 'supporta parzialmente'.",
+        "Utilizza la conclusione 'supporta' soltanto quando la regione selezionata corrisponde chiaramente a una caratteristica morfologica visibile e pertinente alla classe proposta.",
+        "Valuta l'associazione tra le caratteristiche osservate e la classe proposta scegliendo esclusivamente una delle due conclusioni: 'supporta' oppure 'supporta parzialmente'.",
+        "Non discutere la classe alternativa.",
+        "Non formulare una diagnosi autonoma.",
+        "Non aggiungere informazioni cliniche, anatomiche o diagnostiche non direttamente osservabili.",
+        "Non menzionare la confidenza della previsione, la probabilità della classe, il ground truth o la correttezza complessiva della classificazione."]
         self.text_explainer = Agent(role=role, model=model, tools=[], markdown=False, instructions=instructions)
-        self.base_prompt = ("Analizza una singola proiezione radiografica contenente approssimativame una sola vertebra, "
-                            "o una sua porzione o l'intero tratto sacro-coccigeo. La proiezione può essere antero-posteriore "
-                            "o latero-laterale. Considera esclusivamente le regioni maggiormente selezionate nella parte "
-                            "radiografica e ignora completamente ogni testo, titolo, barra, o valore numerico nell'immagine. "
-                            "Prima descrivi soltanto ciò che è direttamente osservabile; successivamente valuta il rapporto "
-                            "tra tale osservazione e la classe proposta")
+        self.base_prompt = ("Analizza una singola proiezione radiografica contenente approssimativamente una sola "
+                            "vertebra, una sua porzione oppure l'intero tratto sacro-coccigeo. La proiezione può essere"
+                            " antero-posteriore o latero-laterale. Ti vengono fornite esattamente tre immagini e il "
+                            "loro ordine è sempre significativo. IMMAGINE 1: radiografia originale senza "
+                            "sovrapposizioni; utilizzala per riconoscere le strutture anatomiche e verificare le "
+                            "caratteristiche morfologiche effettivamente visibili. IMMAGINE 2: rappresentazione isolata"
+                            " delle regioni selezionate dal classificatore come evidenza per la classe proposta; utilizzala "
+                            "esclusivamente per determinare dove si concentra maggiormente l'informazione rilevante e "
+                            "quanto sono estese le regioni selezionate. IMMAGINE 3: sovrapposizione dell'IMMAGINE 2 "
+                            "alla radiografia originale (IMMAGINE 1); utilizzala esclusivamente per stabilire a quali "
+                            "strutture anatomiche visibili nell'IMMAGINE 1 corrispondono le regioni selezionate nell'"
+                            "IMMAGINE 2. Segui questa sequenza concettuale: individua la regione mediante l'IMMAGINE 2,"
+                            " determina la sua corrispondenza anatomica mediante l'IMMAGINE 3 e verifica ogni "
+                            "osservazione morfologica direttamente nell'IMMAGINE 1. L'IMMAGINE 1 rappresenta sempre il "
+                            "riferimento finale per stabilire ciò che può essere affermato nella risposta. Ricorda che "
+                            "il medico che stai supportanto avrà accesso esclusivamente all'IMMAGINE 1.")
         self.ita_classes = ["frattura assente", "frattura presente"]
 
     def textually_explain(self, set_type, desired_instances):
@@ -417,27 +533,48 @@ class MapGenerator:
 
         for instance in desired_instances:
             for folder in os.listdir(cam_dir):
-                if instance in folder:
+                if instance in folder and len(folder.split("_")) == 3:
                     tmp_dir = cam_dir + folder + "/"
                     explanation_path = tmp_dir + "text_explanations.txt"
                     with open(explanation_path, "w", encoding="utf-8") as explanation_file:
                         for overlapped_input in os.listdir(tmp_dir):
-                            if overlapped_input.startswith("Grad-CAM") or overlapped_input.endswith("txt") or overlapped_input.startswith("raw"):
+                            if overlapped_input.startswith("Grad-CAM") or overlapped_input.startswith("HiResCAM") or overlapped_input.endswith("txt") or overlapped_input == "raw_image.png" or overlapped_input == "gt_image.png":
                                 continue
 
                             # Complement prompt with class information
                             predicted_class = int(overlapped_input.split("_class")[-1].split(".")[0])
                             predicted_class = self.ita_classes[predicted_class]
-                            prompt = (self.base_prompt + (f"La regione evidenziata è associata alla classe {predicted_class} secondo il modello AI. "
-                                                          "Descrivi esclusivamente ciò che è chiaramente visibile nella regione evidenziata (giallo/arancion brillante) come evidenza della classe proposta se c'è effettivamente un nesso tra regione evidenziata e classe. "
-                                                          f"Devi essere estremamente persuasivo, in quanto il paragrafo che scriverai verrà valutato da un altro medico come evidenza/prova giudiziale a favore della classe {predicted_class}."
-                                                          f"Indica se le sole caratteristiche osservate supportano, supportano parzialmente, contraddicono oppure sono insufficienti per valutare la classe {predicted_class}. "
-                                                          "Non formulare ipotesi sulle classi alternative, sulla confidenza della previsione o su reperti non visibili. "
-                                                          "Non presumere la presenza o l'assenza di una patologia se non è direttamente dimostrabile dall'immagine. "
-                                                          "La classe proposta potrebbe non corrispondere alla diagnosi reale. "))
+                            prompt = (self.base_prompt + (f" La classe proposta da valutare è '{predicted_class}'. "
+                                                          "Individua innanzitutto mediante l'IMMAGINE 2 le regioni "
+                                                          "maggiormente selezionate dell'immagine, utilizza l'IMMAGINE "
+                                                          "3 per stabilire a quali parti della vertebra o strutture "
+                                                          "anatomiche esse corrispondono e verifica infine nell'"
+                                                          "IMMAGINE 1 quali caratteristiche morfologiche siano "
+                                                          "effettivamente presenti in quelle stesse regioni. Costruisci"
+                                                          " un'argomentazione breve e persuasiva a favore della classe "
+                                                          f"'{predicted_class}' utilizzando esclusivamente "
+                                                          "caratteristiche realmente osservabili nell'IMMAGINE 1 e "
+                                                          "spazialmente corrispondenti alle regioni selezionate nelle "
+                                                          "IMMAGINI 2 e 3. La persuasività deve derivare dalla "
+                                                          "precisione delle osservazioni e non dall'introduzione di "
+                                                          "reperti non visibili. Se il rapporto tra quanto selezionato "
+                                                          f"e la classe '{predicted_class}' è chiaro e sostenuto da una"
+                                                          " caratteristica morfologica direttamente osservabile, "
+                                                          "concludi che l'evidenza 'supporta' la classe proposta; se "
+                                                          "tale rapporto è soltanto parziale, indiretto, debole o non "
+                                                          "completamente valutabile, descrivi soltanto ciò che è "
+                                                          "effettivamente visibile e concludi che l'evidenza 'supporta "
+                                                          "parzialmente' la classe proposta. Non discutere la classe "
+                                                          "alternativa, non utilizzare la classe proposta per dedurre "
+                                                          "automaticamente ciò che dovrebbe essere presente nell'"
+                                                          "immagine e non formulare una diagnosi indipendente. La "
+                                                          "classe proposta potrebbe non corrispondere alla diagnosi "
+                                                          "reale."))
 
                             # Process input
-                            img_input = [Image(filepath=tmp_dir + overlapped_input, detail="high")]
+                            img_input = [Image(filepath=tmp_dir + "raw_image.png", detail="high"),
+                                         Image(filepath=tmp_dir + overlapped_input[8:], detail="high"),
+                                         Image(filepath=tmp_dir + overlapped_input, detail="high")]
 
                             # Explain
                             print(f"Processing {folder}/{overlapped_input}...")
@@ -581,7 +718,7 @@ if __name__ == "__main__":
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize"
     trial_n1 = 2
-    use_cuda1 = True
+    use_cuda1 = False
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
@@ -595,11 +732,11 @@ if __name__ == "__main__":
                               yolo_cropping=yolo_cropping1)
 
     # Draw maps
-    set_type1 = SetType.TEST
+    set_type1 = SetType.VAL
     target_classes1 = [0, 1]
-    explainer_types1 = ["Grad-CAM"]
-    target_layers1 = ["feature_extractor.features.7.2.conv3"]
-    desired_instances1 = ["354d"]#, "370s", "308c", "093l"]
+    explainer_types1 = ["Grad-CAM", "HiResCAM"]
+    target_layers1 = ["feature_extractor.features.7.2.conv3"]#, "feature_extractor.features.7.1.conv3", "feature_extractor.features.6.5.conv3"]
+    desired_instances1 = ["032d", "032l", "446l"]
     cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
                                                                              target_classes=target_classes1,
                                                                              explainer_types=explainer_types1,
@@ -613,5 +750,5 @@ if __name__ == "__main__":
                                           box_thickness=0, blur=True)
 
     # Textual explainer
-    '''generator1.get_textual_explainer()
-    generator1.textually_explain(set_type1, desired_instances1)'''
+    generator1.get_textual_explainer()
+    generator1.textually_explain(set_type1, desired_instances1)
