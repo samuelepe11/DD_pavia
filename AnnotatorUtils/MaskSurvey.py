@@ -17,6 +17,7 @@ from TrainUtils.NetworkTrainer import NetworkTrainer
 from AnnotateMasks import AnnotateMasks
 
 
+# NEEDS Gradio 4.32.2
 # Class
 class MaskSurvey:
     # Define class attributes

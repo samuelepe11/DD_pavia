@@ -1,5 +1,8 @@
 # Import packages
 import os
+
+from ultralytics.engine.results import Boxes
+
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 import torch
@@ -18,6 +21,7 @@ from agno.agent import Agent
 from agno.media import Image
 from agno.models.ollama import Ollama
 from Enumerators.SetType import SetType
+from matplotlib.backends.backend_pdf import PdfPages
 from DataUtils.XrayDataset import XrayDataset
 from TrainUtils.NetworkTrainer import NetworkTrainer
 from Networks.PretrainedFeatureExtractor import PretrainedFeatureExtractor
@@ -48,15 +52,27 @@ class MapGenerator:
             addon = "yolo_" + addon
         self.selected_segments = selected_segments
         self.selected_projection = selected_projection
+        if not yolo_cropping:
+            removable_train = "removable_instances_training.txt"
+            removable_val = "removable_instances_validation.txt"
+            removable_test = "removable_instances_test.txt"
+        else:
+            removable_train = None
+            removable_val = None
+            removable_test = None
+
         self.train_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_training",
                                                    selected_segments=selected_segments,
-                                                   selected_projection=selected_projection)
+                                                   selected_projection=selected_projection,
+                                                   removable_instances_txt=removable_train)
         self.val_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_validation",
                                                  selected_segments=selected_segments,
-                                                 selected_projection=selected_projection)
+                                                 selected_projection=selected_projection,
+                                                 removable_instances_txt=removable_val)
         self.test_data = XrayDataset.load_dataset(working_dir=working_dir, dataset_name=addon + "xray_dataset_test",
                                                   selected_segments=selected_segments,
-                                                  selected_projection=selected_projection)
+                                                  selected_projection=selected_projection,
+                                                  removable_instances_txt=removable_test)
 
         # Load model
         self.trainer = NetworkTrainer.load_model(working_dir=working_dir, model_name=model_name, trial_n=trial_n,
@@ -147,54 +163,56 @@ class MapGenerator:
         masks = []
         data_names_tmp = []
         box_coords = []
-        for i, instance in enumerate(data):
-            item, extra = instance
-            projection_type = []
-            resized_img = []
-            instance_name = f"{extra[0]:03d}" + extra[1].lower()
-            if desired_instances is not None and instance_name not in desired_instances:
-                continue
-            extras1.append(extra[1])
-            extras.append(extra)
+        data_names = desired_instances if desired_instances is not None else data.dicom_instances
+        for data_name in data_names:
+            for i, instance in enumerate(data):
+                item, extra = instance
+                projection_type = []
+                resized_img = []
+                instance_name = f"{extra[0]:03d}" + extra[1].lower()
+                if instance_name != data_name:
+                    continue
+                extras1.append(extra[1])
+                extras.append(extra)
 
-            fold = self.trainer.preprocessor.segmentation_dir + set_type.value
-            for j in range(len(item)):
-                if not self.is_cropped:
-                    projection_type_j, projection_j, frac_label = item[j]
-                else:
-                    projection_type_j, projection_j, frac_label, extra_info = item[j]
-                projection_type.append(projection_type_j)
-                original_imgs.append(np.stack([projection_j / np.max(projection_j)] * 3, axis=-1))
-                resized_img.append(cv2.resize(projection_j, (img_dim, img_dim))[np.newaxis, :, :])
-                data_shape_list.append(projection_j.shape)
-                data_labels.append(int(frac_label != ""))
-                if segm_names is not None:
-                    data_names.append(segm_names[i] + "_" + str(j))
-                else:
-                    data_names_tmp.append(extra_info.split("file_name=")[-1].split(",")[0][1:-5])
+                fold = self.trainer.preprocessor.segmentation_dir + set_type.value
+                for j in range(len(item)):
+                    if not self.is_cropped:
+                        projection_type_j, projection_j, frac_label = item[j]
+                    else:
+                        projection_type_j, projection_j, frac_label, extra_info = item[j]
+                    projection_type.append(projection_type_j)
+                    original_imgs.append(np.stack([projection_j / np.max(projection_j)] * 3, axis=-1))
+                    resized_img.append(cv2.resize(projection_j, (img_dim, img_dim))[np.newaxis, :, :])
+                    data_shape_list.append(projection_j.shape)
+                    data_labels.append(int(frac_label != ""))
+                    if segm_names is not None:
+                        data_names.append(segm_names[i] + "_" + str(j))
+                    else:
+                        data_names_tmp.append(extra_info.split("file_name=")[-1].split(",")[0][1:-5])
 
-                # Save ranges
-                tmp = extra_info.split("x_min=")[1].split(", x_max=")
-                x_min = int(tmp[0])
-                tmp = tmp[1].split(", y_min=")
-                x_max = int(tmp[0])
-                tmp = tmp[1].split(", y_max=")
-                y_min = int(tmp[0])
-                y_max = int(tmp[1].split(", fracture_present")[0])
-                box_coords.append({"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max})
+                    # Save ranges
+                    tmp = extra_info.split("x_min=")[1].split(", x_max=")
+                    x_min = int(tmp[0])
+                    tmp = tmp[1].split(", y_min=")
+                    x_max = int(tmp[0])
+                    tmp = tmp[1].split(", y_max=")
+                    y_min = int(tmp[0])
+                    y_max = int(tmp[1].split(", fracture_present")[0])
+                    box_coords.append({"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max})
 
-                # Get masks for visualization
-                if not self.is_cropped:
-                    try:
-                        projection_id = extra[2]
-                    except IndexError:
-                        projection_id = j
-                    filepath = fold + "/" + instance_name + "/projection" + str(projection_id) + ".png"
-                    mask_j = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-                    mask_j = cv2.resize(mask_j, (projection_j.shape[1], projection_j.shape[0])) / 255
-                    masks.append(cv2.blur(mask_j, (101, 101)))
-            data_list.append(resized_img)
-            projection_types.append(projection_type)
+                    # Get masks for visualization
+                    if not self.is_cropped:
+                        try:
+                            projection_id = extra[2]
+                        except IndexError:
+                            projection_id = j
+                        filepath = fold + "/" + instance_name + "/projection" + str(projection_id) + ".png"
+                        mask_j = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+                        mask_j = cv2.resize(mask_j, (projection_j.shape[1], projection_j.shape[0])) / 255
+                        masks.append(cv2.blur(mask_j, (101, 101)))
+                data_list.append(resized_img)
+                projection_types.append(projection_type)
 
         if len(projection_types) > 1:
             max_proj_num = np.max([len(projection_type) for projection_type in projection_types])
@@ -214,7 +232,7 @@ class MapGenerator:
         extra_inputs_list = [extras1, projection_types, True]
 
         # Get CAMs
-        max_batch_size = 32
+        max_batch_size = 2
         if desired_instances is not None and len(desired_instances) < max_batch_size:
             cams_dict, predicted_probs_dict, bar_ranges_dict = self.cam_builder.get_cam(data_list, data_labels,
                                                                                         target_classes, explainer_types,
@@ -255,6 +273,8 @@ class MapGenerator:
                         bar_ranges_dict.update({k: bar_ranges_tmp[k]})
                     else:
                         cams_dict.update({k: cams_dict[k] + cams_tmp[k]})
+                        predicted_probs_dict.update({k: np.concatenate([predicted_probs_dict[k], predicted_probs_tmp[k]])})
+                        bar_ranges_dict.update({k: (np.concatenate([bar_ranges_dict[k][0], bar_ranges_tmp[k][0]]), np.concatenate([bar_ranges_dict[k][1], bar_ranges_tmp[k][1]]))})
                 del data_list_batch, data_labels_batch, data_names_batch, extra_preprocess_inputs_batch, extra_inputs_batch, data_shape_batch
                 del cams_tmp, predicted_probs_tmp, bar_ranges_tmp
                 gc.collect()
@@ -270,6 +290,7 @@ class MapGenerator:
                 plt.yticks([], [])
                 plt.savefig(cam_dir + data_name + "/raw_image.png", format="png", bbox_inches="tight",
                             pad_inches=0, dpi=500)
+                plt.close()
 
         # Display overlapped
         comparison_classes = target_classes
@@ -307,7 +328,7 @@ class MapGenerator:
                                                 dataset_name="xray_dataset_" + set_type.value,
                                                 selected_segments=self.selected_segments,
                                                 selected_projection=self.selected_projection)
-        data_names = full_dataset.dicom_projection_instances if desired_instances is None else desired_instances
+        data_names = full_dataset.dicom_instances if desired_instances is None else desired_instances
         addon = "_multi_projection" if not self.projection_dataset else "_single_projection"
         if self.yolo_cropping:
             addon += "_yolo_cropping"
@@ -319,8 +340,6 @@ class MapGenerator:
             for comparison_algorithm in explainer_types:
                 for comparison_layer in target_layers:
                     cam_key = comparison_algorithm + "_" + comparison_layer + "_class" + str(comparison_class)
-                    iou_list = []
-                    iogt_list = []
                     counter = 0
                     for data_name in data_names:
                         original_item, _ = full_dataset.get_data_from_name(data_name)
@@ -402,6 +421,29 @@ class MapGenerator:
                             if data_name_tmp not in os.listdir(cam_dir):
                                 os.mkdir(cam_dir + data_name_tmp)
 
+                            # GT box visualization
+                            if "predicted_boxes.png" not in os.listdir(cam_dir + data_name_tmp + "/"):
+                                box_img = np.zeros_like(original_img)
+                                probs = predicted_probs_dict[cam_key]
+                                for i, box in enumerate(boxes):
+                                    x_min, x_max, y_min, y_max = box["x_min"], box["x_max"], box["y_min"], box["y_max"]
+                                    prob = float(np.asarray(probs[i]).squeeze())
+                                    if prob >= 0.5:
+                                        color = (0, 0, 255)
+                                        cv2.rectangle(box_img, (x_min, y_min), (x_max, y_max), color, thickness=8)
+                                        label = f"{prob:.3f}"
+                                        (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
+                                                                                     2, 3)
+                                        if x_max + 12 + text_w < box_img.shape[1]:
+                                            text_x = x_max + 12
+                                        else:
+                                            text_x = max(5, x_min - text_w - 12)
+                                        text_y = y_min + ((y_max - y_min) + text_h) // 2
+                                        cv2.putText(box_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX,
+                                                    1.5, color, 3, cv2.LINE_AA)
+                                cv2.imwrite(cam_dir + data_name_tmp + "/predicted_boxes.png", box_img)
+
+                            # Raw image
                             if "raw_image.png" not in os.listdir(cam_dir + data_name_tmp + "/"):
                                 plt.figure()
                                 plt.imshow(original_img_tmp)
@@ -409,6 +451,7 @@ class MapGenerator:
                                 plt.yticks([], [])
                                 plt.savefig(cam_dir + data_name_tmp + "/raw_image.png", format="png",
                                             bbox_inches="tight", pad_inches=0, dpi=500)
+                                plt.close()
 
                             if "xray_dataset_" + set_type.value + "_masks" in os.listdir(self.data_dir):
                                 gt_mask = cv2.imread(self.data_dir + "xray_dataset_" + set_type.value +
@@ -426,19 +469,27 @@ class MapGenerator:
                                     plt.yticks([], [])
                                     plt.savefig(cam_dir + data_name_tmp + "/gt_image.png", format="png",
                                                 bbox_inches="tight", pad_inches=0, dpi=500)
+                                    plt.close()
                             else:
                                 gt_mask = None
 
+                            # CAM alone
+                            norm = self.cam_builder._CamBuilder__get_norm(full_cam)
+                            cam_norm = norm(full_cam) if norm is not None else full_cam
+                            filename = (comparison_algorithm + "_" + re.sub(r"\W", "_", comparison_layer) +
+                                        "_class" + str(comparison_class) + ".png")
+                            cv2.imwrite(cam_dir + data_name_tmp + "/" + filename, cam_norm)
+
+                            # CAM overlapped
                             plt.figure()
                             plt.imshow(original_img_tmp)
-                            norm = self.cam_builder._CamBuilder__get_norm(full_cam)
                             map = plt.imshow(full_cam, cmap="inferno", norm=norm)
                             map.set_alpha(0.3)
                             plt.xticks([], [])
                             plt.yticks([], [])
-                            filename = (cam_dir + data_name_tmp + "/" + "results_" + comparison_algorithm + "_" +
-                                        re.sub(r"\W", "_", comparison_layer) + "_class" + str(comparison_class) + ".png")
+                            filename = (cam_dir + data_name_tmp + "/" + "results_" + filename)
                             plt.savefig(filename, format="png", bbox_inches="tight", pad_inches=0, dpi=500)
+                            plt.close()
                             '''self.cam_builder.overlapped_output_display(data_list=[original_img_tmp], data_labels=[data_label],
                                                                        predicted_probs_dict=prob, cams_dict=cam,
                                                                        explainer_types=comparison_algorithm,
@@ -448,22 +499,263 @@ class MapGenerator:
                                                                        bar_ranges_dict=bar, fig_size=(20, 12),
                                                                        results_dir_path=cam_dir + data_name_tmp + "/")'''
 
+    def compute_validation_metrics(self, set_type, target_classes, explainer_types, target_layers, desired_instances=None):
+        # Choose data
+        data, _, _ = self.trainer.select_dataset(set_type)
+        full_dataset = XrayDataset.load_dataset(working_dir=self.working_dir,
+                                                dataset_name="xray_dataset_" + set_type.value,
+                                                selected_segments=self.selected_segments,
+                                                selected_projection=self.selected_projection)
+        data_names = full_dataset.dicom_instances if desired_instances is None else desired_instances
+        addon = "_multi_projection" if not self.projection_dataset else "_single_projection"
+        if self.yolo_cropping:
+            addon += "_yolo_cropping"
+        cam_dir = self.jai_dir + set_type.value + addon + "/"
+
+        for comparison_class in target_classes:
+            for comparison_algorithm in explainer_types:
+                for comparison_layer in target_layers:
+                    iou_list = []
+                    iogt_list = []
+                    for data_name in data_names:
+                        original_item, _ = full_dataset.get_data_from_name(data_name)
+                        for j in range(len(original_item)):
+                            data_name_tmp = data_name + "_proj" + str(j)
+                            # Get CAM
+                            filename = (comparison_algorithm + "_" + re.sub(r"\W", "_", comparison_layer) +
+                                        "_class" + str(comparison_class) + ".png")
+                            cam = cv2.imread(cam_dir + data_name_tmp + "/" + filename, cv2.IMREAD_GRAYSCALE)
+                            if cam is None:
+                                continue
+                            cam = cam / np.max(cam)
+
+                            # GT mask
+                            gt_mask = cv2.imread(self.data_dir + "xray_dataset_" + set_type.value +
+                                                 "_masks/gt_masks/" + data_name + "/projection" + str(j) + ".jpg",
+                                                 cv2.IMREAD_GRAYSCALE)
+                            gt_mask = cv2.resize(gt_mask, (cam.shape[1], cam.shape[0]),
+                                                 interpolation=cv2.INTER_NEAREST)
+                            gt_mask = (gt_mask >= 128).astype(np.uint8) * 255
+
                             # Compute validation metrics
-                            if gt_mask is not None:
-                                m = np.mean(full_cam)
-                                s = np.std(full_cam)
-                                full_cam_bin = full_cam >= m + s
-                                intersection = np.logical_and(gt_mask, full_cam_bin).sum()
-                                union = np.logical_or(gt_mask, full_cam_bin).sum()
-                                gt_area = gt_mask.sum() / 255
-                                iou_list.append(intersection / union if union > 0 else 0.0)
-                                iogt_list.append(intersection / gt_area if gt_area > 0 else 0.0)
+                            if gt_mask is not None and cam is not None:
+                                cam_black = np.all(np.abs(cam) < 1e-8)
+                                gt_black = np.all(gt_mask == 0)
+                                if cam_black and gt_black:
+                                    iou = 1.0
+                                    iogt = 1.0
+                                elif cam_black or gt_black:
+                                    iou = 0.0
+                                    iogt = 0.0
+                                else:
+                                    m = np.mean(cam)
+                                    s = np.std(cam)
+                                    full_cam_bin = cam >= m + s
+                                    intersection = np.logical_and(gt_mask, full_cam_bin).sum()
+                                    union = np.logical_or(gt_mask, full_cam_bin).sum()
+                                    gt_area = gt_mask.sum() / 255
+                                    iou = intersection / union if union > 0 else 0.0
+                                    iogt = intersection / gt_area if gt_area > 0 else 0.0
+                                iou_list.append(iou)
+                                iogt_list.append(iogt)
 
                     # Store final IoU and IoGT
-                    with open(cam_dir + "/" + "validation.txt", "w", encoding="utf-8") as f:
+                    with open(cam_dir + "/" + "validation.txt", "a", encoding="utf-8") as f:
                         f.write(f"Class = {comparison_class}, algorithm = {comparison_algorithm}, layer = {comparison_layer}\n")
                         f.write(f"IoU = {np.mean(iou_list)}\n")
                         f.write(f"IoGT = {np.mean(iogt_list)}\n\n")
+
+    def generate_gt_prediction_pdf(self, set_type, desired_instances=None, output_path=None, threshold=0.5,
+                                   box_thickness=8, max_batch_size=32):
+        data, _, _ = self.trainer.select_dataset(set_type)
+        gt_data = XrayDataset.load_dataset(working_dir=self.working_dir,
+                                           dataset_name="cropped_xray_dataset_" + set_type.value,
+                                           selected_segments=self.selected_segments,
+                                           selected_projection=self.selected_projection)
+        full_dataset = XrayDataset.load_dataset(working_dir=self.working_dir,
+                                                dataset_name="xray_dataset_" + set_type.value,
+                                                selected_segments=self.selected_segments,
+                                                selected_projection=self.selected_projection)
+
+        data_names = full_dataset.dicom_instances if desired_instances is None else desired_instances
+        data_names_set = set(data_names)
+
+        if output_path is None:
+            output_path = self.jai_dir + set_type.value + "_gt_vs_model.pdf"
+
+        img_dim = self.trainer.net.input_dim
+        box_keys = ["x_min", "x_max", "y_min", "y_max"]
+        records = []
+
+        for cropped_item, cropped_extra in data:
+            instance_name = f"{cropped_extra[0]:03d}" + cropped_extra[1].lower()
+            if instance_name not in data_names_set:
+                continue
+
+            for projection_type_j, projection_j, _, extra_info in cropped_item:
+                match = re.search(r"proj(\d+)", extra_info)
+                if match is None:
+                    raise ValueError(f"Projection number not found in YOLO crop: {extra_info}")
+
+                projection_id = int(match.group(1))
+                box = {key: int(extra_info.split(key + "=")[-1].split(",")[0]) for key in box_keys}
+                full_width = int(extra_info.split("width=")[-1].split(",")[0])
+                full_height = int(extra_info.split("height=")[-1].split(",")[0])
+
+                records.append(
+                    {"instance": instance_name, "projection_id": projection_id, "projection_type": projection_type_j,
+                     "projection": projection_j, "extra": cropped_extra, "box": box, "full_width": full_width,
+                     "full_height": full_height})
+
+        gt_records = []
+
+        for cropped_item, cropped_extra in gt_data:
+            instance_name = f"{cropped_extra[0]:03d}" + cropped_extra[1].lower()
+            if instance_name not in data_names_set:
+                continue
+
+            for _, _, frac_label, extra_info in cropped_item:
+                match = re.search(r"proj(\d+)", extra_info)
+                if match is None:
+                    raise ValueError(f"Projection number not found in GT crop: {extra_info}")
+
+                projection_id = int(match.group(1))
+                box = {key: int(extra_info.split(key + "=")[-1].split(",")[0]) for key in box_keys}
+                gt_records.append(
+                    {"instance": instance_name, "projection_id": projection_id, "gt": int(frac_label != ""),
+                     "box": box})
+
+        net = self.trainer.net
+        device = next(net.parameters()).device
+        net.device = device
+
+        was_training = net.training
+        net.eval()
+
+        with torch.inference_mode():
+            for start_idx in range(0, len(records), max_batch_size):
+                end_idx = min(start_idx + max_batch_size, len(records))
+                batch_records = records[start_idx:end_idx]
+
+                batch_inputs = []
+                batch_segments = []
+                batch_projection_types = []
+
+                for record in batch_records:
+                    resized_img = cv2.resize(record["projection"], (img_dim, img_dim))[np.newaxis, :, :]
+                    input_tensor = self.preprocess_fn(resized_img, self.trainer, [record["projection_type"]],
+                                                      record["extra"], set_type, None)
+
+                    batch_inputs.append(input_tensor)
+                    batch_segments.append(record["extra"][1])
+                    batch_projection_types.append([record["projection_type"]])
+
+                batch_inputs = torch.stack(batch_inputs).to(device)
+                outputs = net(batch_inputs, batch_segments, batch_projection_types, True)
+                probs = torch.sigmoid(outputs).detach().cpu().numpy().reshape(-1)
+
+                for record, prob in zip(batch_records, probs):
+                    record["prob"] = float(prob)
+
+        if was_training:
+            net.train()
+
+        for record in records:
+            del record["projection"]
+            del record["extra"]
+            del record["projection_type"]
+
+        records_by_projection = {}
+        for record in records:
+            key = (record["instance"], record["projection_id"])
+            if key not in records_by_projection:
+                records_by_projection[key] = []
+            records_by_projection[key].append(record)
+
+        gt_records_by_projection = {}
+        for record in gt_records:
+            key = (record["instance"], record["projection_id"])
+            if key not in gt_records_by_projection:
+                gt_records_by_projection[key] = []
+            gt_records_by_projection[key].append(record)
+
+        with PdfPages(output_path) as pdf:
+            for data_name in data_names:
+                original_item, _ = full_dataset.get_data_from_name(data_name)
+                n_projections = len(original_item)
+
+                fig, axes = plt.subplots(n_projections, 2, figsize=(14, 6 * n_projections), squeeze=False)
+                fig.suptitle("Instance " + data_name, fontsize=18)
+
+                for j in range(n_projections):
+                    _, original_projection, _ = original_item[j]
+                    projection_records = records_by_projection.get((data_name, j), [])
+                    projection_gt_records = gt_records_by_projection.get((data_name, j), [])
+
+                    max_val = np.max(original_projection)
+                    original_projection = original_projection / max_val if max_val > 0 else original_projection
+                    original_img = np.stack([original_projection] * 3, axis=-1)
+
+                    if len(projection_records) > 0:
+                        full_width = projection_records[0]["full_width"]
+                        full_height = projection_records[0]["full_height"]
+                        original_img = cv2.resize(original_img, (full_width, full_height))
+
+                    original_img = (np.clip(original_img, 0, 1) * 255).astype(np.uint8)
+                    gt_img = original_img.copy()
+                    pred_img = original_img.copy()
+                    color = (255, 0, 0)
+
+                    for record in projection_gt_records:
+                        if record["gt"] != 1:
+                            continue
+
+                        box = record["box"]
+                        x_min = max(0, min(gt_img.shape[1] - 1, box["x_min"]))
+                        x_max = max(0, min(gt_img.shape[1] - 1, box["x_max"]))
+                        y_min = max(0, min(gt_img.shape[0] - 1, box["y_min"]))
+                        y_max = max(0, min(gt_img.shape[0] - 1, box["y_max"]))
+                        cv2.rectangle(gt_img, (x_min, y_min), (x_max, y_max), color, thickness=box_thickness)
+
+                    for record in projection_records:
+                        if record["prob"] < threshold:
+                            continue
+
+                        box = record["box"]
+                        x_min = max(0, min(pred_img.shape[1] - 1, box["x_min"]))
+                        x_max = max(0, min(pred_img.shape[1] - 1, box["x_max"]))
+                        y_min = max(0, min(pred_img.shape[0] - 1, box["y_min"]))
+                        y_max = max(0, min(pred_img.shape[0] - 1, box["y_max"]))
+
+                        cv2.rectangle(pred_img, (x_min, y_min), (x_max, y_max), color, thickness=box_thickness)
+
+                        label = f"{record['prob']:.3f}"
+                        font_scale = 1.2
+                        text_thickness = 3
+                        (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                                                              text_thickness)
+
+                        text_x = x_max + 12 if x_max + 12 + text_w < pred_img.shape[1] else max(5, x_min - text_w - 12)
+                        text_y = y_min + ((y_max - y_min) + text_h) // 2
+                        text_y = max(text_h + 5, min(pred_img.shape[0] - 5, text_y))
+
+                        cv2.putText(pred_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color,
+                                    text_thickness, cv2.LINE_AA)
+
+                    axes[j, 0].imshow(gt_img)
+                    axes[j, 0].set_title("Ground truth", fontsize=14)
+                    axes[j, 0].axis("off")
+
+                    axes[j, 1].imshow(pred_img)
+                    axes[j, 1].set_title("Prediction", fontsize=14)
+                    axes[j, 1].axis("off")
+
+                plt.tight_layout(rect=[0, 0, 1, 0.97])
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close(fig)
+
+        print("PDF stored in:", output_path)
+        return output_path
 
     def get_textual_explainer(self):
         role = ("Sei un sistema di supporto alla decisione medica esperto nella valutazione di radiografie della colonna"
@@ -577,7 +869,7 @@ class MapGenerator:
                                          Image(filepath=tmp_dir + overlapped_input, detail="high")]
 
                             # Explain
-                            print(f"Processing {folder}/{overlapped_input}...")
+                            print(f"Textually explaining {folder}/{overlapped_input}...")
                             response = self.text_explainer.run(prompt, images=img_input)
                             explanation_file.write(overlapped_input + "\n")
                             explanation_file.write(response.content.strip().replace("\n\n", " ").replace("\n", " ") + "\n\n")
@@ -733,10 +1025,10 @@ if __name__ == "__main__":
 
     # Draw maps
     set_type1 = SetType.VAL
-    target_classes1 = [0, 1]
-    explainer_types1 = ["Grad-CAM", "HiResCAM"]
-    target_layers1 = ["feature_extractor.features.7.2.conv3"]#, "feature_extractor.features.7.1.conv3", "feature_extractor.features.6.5.conv3"]
-    desired_instances1 = ["032d", "032l", "446l"]
+    target_classes1 = [1]
+    explainer_types1 = ["Grad-CAM"]
+    target_layers1 = ["feature_extractor.features.7.2.conv3"]#feature_extractor.features.6.5.conv3"]#"feature_extractor.features.7.2.conv3"]#, "feature_extractor.features.7.1.conv3",
+    desired_instances1 = None # ["032d"]#, "032l", "446l"]
     cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
                                                                              target_classes=target_classes1,
                                                                              explainer_types=explainer_types1,
@@ -749,6 +1041,11 @@ if __name__ == "__main__":
                                           target_layers=target_layers1, desired_instances=desired_instances1,
                                           box_thickness=0, blur=True)
 
+    # Compute validation metrics
+    generator1.compute_validation_metrics(set_type=set_type1, target_classes=target_classes1,
+                                          explainer_types=explainer_types1, target_layers=target_layers1,
+                                          desired_instances=desired_instances1)
+
     # Textual explainer
-    generator1.get_textual_explainer()
-    generator1.textually_explain(set_type1, desired_instances1)
+    # generator1.get_textual_explainer()
+    # generator1.textually_explain(set_type1, desired_instances1)

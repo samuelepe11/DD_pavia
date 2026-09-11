@@ -13,6 +13,7 @@ import io
 import gc
 import json
 import pandas as pd
+from matplotlib.pyplot import barbs
 from pyarrow.dataset import dataset
 from sqlalchemy.testing import is_not_
 from tensorflow.python.ops.linalg.linalg_impl import transpose
@@ -424,6 +425,10 @@ class NetworkTrainer:
         loss = 0
         with torch.no_grad():
             for batch in loader:
+                for i in range(len(batch[1][0])):
+                    if str(batch[1][0][i]) + (batch[1][1][i]).lower() + "_" + str(batch[1][2][i]) == "446l_3":
+                        print(i)
+                        print()
                 temp_loss, output, y, _ = self.apply_network(net, batch, set_type=set_type, zero_shot=zero_shot)
                 loss += temp_loss.item()
 
@@ -1760,8 +1765,8 @@ if __name__ == "__main__":
     is_cropped1 = True
     weight_loss1 = False
     dynamic_under_sampling1 = True
-    transpose1 = False
-    equalize_images1 = False
+    transpose1 = True
+    equalize_images1 = True
 
     # Load data
     addon = "" if not is_cropped1 else "cropped_"
@@ -1783,7 +1788,7 @@ if __name__ == "__main__":
                    "n_conv_view_layers": 0, "kernel_size": 7, "n_fc_layers": 4, "optimizer": "SGD",
                    "lr_last": 0.00001, "lr_second_last_factor": 71, "batch_size": 32, "p_dropout": 0.9,
                    "use_batch_norm": False}
-    trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=train_data1,
+    trainer1 = NetworkTrainer(model_name=model_name1, working_dir=working_dir1, train_data=val_data1,
                               val_data=val_data1, test_data=test_data1, net_type=net_type1, epochs=epochs1,
                               val_epochs=val_epochs1, preprocess_inputs=preprocess_inputs1, net_params=net_params1,
                               use_cuda=use_cuda1, projection_dataset=projection_dataset1, enhance_images=enhance_images1,
@@ -1802,7 +1807,7 @@ if __name__ == "__main__":
     # Evaluate model
     print()
     trainer1 = NetworkTrainer.load_model(working_dir=working_dir1, model_name=model_name1, trial_n=trial_n1,
-                                         use_cuda=use_cuda1, train_data=train_data1, val_data=val_data1,
+                                         use_cuda=use_cuda1, train_data=val_data1, val_data=val_data1,
                                          test_data=test_data1, projection_dataset=projection_dataset1,
                                          is_cropped=is_cropped1)
     trainer1.summarize_performance(show_test=show_test1, show_process=True, show_cm=True,
