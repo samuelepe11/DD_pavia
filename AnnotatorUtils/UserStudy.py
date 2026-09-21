@@ -58,7 +58,7 @@ class SurveyCreator:
                    - Dovrai <span style='color:#f97316;'>effettuare l'accesso scegliendo uno username</span> (ad esempio, il tuo cognome). Questo ti consentirà di interrompere il questionario e riprenderlo successivamente, se necessario.
                    - Ti verrà somministrato un breve <span style='color:#f97316;'>questionario di profilazione</span>.
                    - Visualizzerai i dati RX di 24 pazienti, che includono almeno due proiezioni per ognuno (antero-posteriore e/o laterale). 
-                     * <span style='color:#f97316;'>Dovrai effetturare una valutazione, supportato dall'IA</span>: in ordine casuale valuterai (a) 8 casi con supporto diretto (bounding-box), (b) 8 casi con un supporto indiretto basato su mappa di calore a colorazione calda, (c) 8 casi con un secondo supporto indiretto basato su mappa di calore a colori freddi. Ogni sistema verrà meglio dettagliato nella schermata dedicata.
+                     * <span style='color:#f97316;'>Dovrai effetturare una valutazione, supportato dall'IA</span>: in ordine casuale valuterai (a) 8 casi con supporto esplicito (bounding-box), (b) 8 casi con un supporto basato su mappa di calore a colorazione calda, (c) 8 casi con un secondo supporto indiretto basato su mappa di calore a colori freddi. Ogni sistema verrà meglio dettagliato nella schermata dedicata.
                      * <span style='color:#f97316;'>Per ciascun RX dovrai fornire una diagnosi</span> - elencando se il paziente presenta fratture e, in caso, quali vertebre sono riguardate e dove - e valutare la tua confidenza diagnostica, la complessità del caso e l'utilità del supporto.
                    - Dopo l'utilizzo di ciascun sistema, compilerai un breve <span style='color:#f97316;'>questionario per valutare la tua esperienza complessiva</span>.
                 """
@@ -343,7 +343,7 @@ class SurveyCreator:
             os.mkdir(self.survey_dir + name)
         else:
             gr.Success("Lo username '" + name + "' è già presente nel nostro database. I tuoi progressi precedenti "
-                                                "verranno caricati e potrai continuare la compulaziojne del survey da "
+                                                "verranno caricati e potrai continuare la compilazione del survey da "
                                                 "dove l'hai interrotto.")
 
         # Check for survey result file
@@ -362,9 +362,9 @@ class SurveyCreator:
                 elif len(branches_order) == 1:
                     user_seed = hash(name) % 1_000_000
                     rng = random.Random(user_seed)
-                    branches_order += rng.sample(list(set(self.branches) - set(branches_order)), k=2)
+                    branches_order += rng.sample([b for b in self.branches if b not in branches_order], k=2)
                 else:
-                    branches_order += list(set(self.branches) - set(branches_order))
+                    branches_order += [b for b in self.branches if b not in branches_order]
             except IndexError:
                 branches_order = None
             try:
@@ -372,7 +372,7 @@ class SurveyCreator:
                 if len(cam_order) == 0:
                     cam_order = None
                 else:
-                    cam_order += list(set(self.cam_names) - set(cam_order))
+                    cam_order += [c for c in self.cam_names if c not in cam_order]
             except IndexError:
                 cam_order = None
         else:
@@ -390,7 +390,7 @@ class SurveyCreator:
         if not isinstance(self.desired_instances, dict):
             try:
                 evaluated_instances = results_file["instance"].unique().tolist()
-                remaining_instances = list(set(self.desired_instances) - set(evaluated_instances))
+                remaining_instances = [ins for ins in self.desired_instances if ins not in evaluated_instances]
             except KeyError:
                 evaluated_instances = []
                 remaining_instances = self.desired_instances
@@ -400,19 +400,15 @@ class SurveyCreator:
             rng = random.Random(user_seed)
             items = list(self.desired_instances.items())
             rng.shuffle(items)
-            self.desired_instances = dict(items)
+            ordered_desired_instances = dict(items)
 
             # Read ordered blocks
-            try:
-                branches = results_file["branch"].dropna().unique().tolist()
-                evaluated_instances = {list(self.desired_instances.keys())[i]: results_file.loc[
-                    results_file["branch"] == branch, "instance"].dropna().unique().tolist()
-                                       for i, branch in enumerate(branches)}
-                remaining_instances = {k: list(set(v) - set(evaluated_instances[k]))
-                                       for k, v in self.desired_instances.items()}
-            except KeyError:
-                evaluated_instances = {k: [] for k in self.desired_instances.keys()}
-                remaining_instances = self.desired_instances
+            evaluated_all = results_file["instance"].dropna().tolist()
+            evaluated_instances = {k: [instance for instance in v if instance in evaluated_all]
+                                   for k, v in ordered_desired_instances.items()}
+            remaining_instances = {k: [instance for instance in v if instance not in evaluated_instances[k]]
+                                   for k, v in ordered_desired_instances.items()}
+            remaining_instances = dict(sorted(remaining_instances.items(), key=lambda x: len(x[1]), reverse=False))
 
         # Shuffle remaining instances
         user_seed = hash(name) % 1_000_000
@@ -499,8 +495,8 @@ class SurveyCreator:
             tab3 = self.allow_interaction
             selected = 3
             state_dict.update({"current_branch": state_dict["branches_order"][0]})
-            if count == 0:
-                state_dict.update({"preliminary_flag": True})
+            '''if count == 0:
+                state_dict.update({"preliminary_flag": True})'''
             descr_flag = True
         else:
             # Go to preliminary questionnaire
