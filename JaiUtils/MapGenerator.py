@@ -139,6 +139,10 @@ class MapGenerator:
     def get_cam(self, set_type, target_classes, explainer_types, target_layers, desired_instances=None):
         # Choose data
         data, _, _ = self.trainer.select_dataset(set_type)
+        if isinstance(desired_instances, dict):
+            desired_instances = (desired_instances["block 1"] + desired_instances["block 2"] +
+                                 desired_instances["block 3"])
+
         if self.projection_dataset:
             segm_names = None
             data_names = data.dicom_projection_instances if desired_instances is None else desired_instances
@@ -324,6 +328,10 @@ class MapGenerator:
                                    explainer_types, target_layers, desired_instances=None, box_thickness=3, blur=False):
         # Choose data
         data, _, _ = self.trainer.select_dataset(set_type)
+        if isinstance(desired_instances, dict):
+            desired_instances = (desired_instances["block 1"] + desired_instances["block 2"] +
+                                 desired_instances["block 3"])
+
         full_dataset = XrayDataset.load_dataset(working_dir=self.working_dir,
                                                 dataset_name="xray_dataset_" + set_type.value,
                                                 selected_segments=self.selected_segments,
@@ -347,12 +355,14 @@ class MapGenerator:
                         for j in range(len(original_item)):
                             # Get full radiography
                             _, original_projection_j, frac_label_j = original_item[j]
-                            original_img = np.stack([original_projection_j / np.max(original_projection_j)] * 3, axis=-1)
+                            original_img = np.stack([original_projection_j / np.max(original_projection_j)] * 3,
+                                                    axis=-1)
                             frac_labels.append(frac_label_j)
 
                             # Get cropped patch
                             flag = True
                             boxes = []
+                            box_probs = []
                             for cropped_item, cropped_extra in data:
                                 if not f"{cropped_extra[0]:03}" + cropped_extra[1].lower() == data_name:
                                     continue
@@ -376,6 +386,7 @@ class MapGenerator:
                                         box["y_min"] -= box["y_max"] - new_max
                                         box["y_max"] = new_max
                                     boxes.append(box)
+                                    box_probs.append(float(np.asarray(predicted_probs_dict[cam_key][counter]).squeeze()))
 
                                     max_val = bar_ranges_dict[cam_key][1][counter][0]
                                     min_val = bar_ranges_dict[cam_key][0][counter][0]
@@ -410,7 +421,8 @@ class MapGenerator:
 
                             # Display overlapped
                             '''prob = {cam_key: np.mean(predicted_probs_dict[cam_key])[np.newaxis]}'''
-                            full_cam, bar_ranges = self.cam_builder._CamBuilder__normalize_cams(full_cam[np.newaxis, :, :], True, False)
+                            full_cam, bar_ranges = self.cam_builder._CamBuilder__normalize_cams(
+                                full_cam[np.newaxis, :, :], True, False)
                             full_cam = full_cam[0]
                             if blur:
                                 full_cam = cv2.GaussianBlur(full_cam, (101, 101), 0)
@@ -424,23 +436,45 @@ class MapGenerator:
                             # GT box visualization
                             if "predicted_boxes.png" not in os.listdir(cam_dir + data_name_tmp + "/"):
                                 box_img = np.zeros_like(original_img)
-                                probs = predicted_probs_dict[cam_key]
-                                for i, box in enumerate(boxes):
+                                candidates = []
+                                for box, prob in zip(boxes, box_probs):
+                                    if prob >= 0.01:
+                                        candidates.append({"box": box, "prob": prob})
+                                filtered_candidates = []
+                                for i, cand_i in enumerate(candidates):
+                                    box_i = cand_i["box"]
+                                    prob_i = cand_i["prob"]
+                                    keep = True
+                                    for j, cand_j in enumerate(candidates):
+                                        if i == j:
+                                            continue
+                                        box_j = cand_j["box"]
+                                        prob_j = cand_j["prob"]
+                                        inside = (box_i["x_min"] >= box_j["x_min"] and
+                                                  box_i["x_max"] <= box_j["x_max"] and
+                                                  box_i["y_min"] >= box_j["y_min"] and
+                                                  box_i["y_max"] <= box_j["y_max"])
+                                        if inside and prob_j > prob_i:
+                                            keep = False
+                                            break
+                                    if keep:
+                                        filtered_candidates.append(cand_i)
+                                for cand in filtered_candidates:
+                                    box = cand["box"]
+                                    prob = cand["prob"]
                                     x_min, x_max, y_min, y_max = box["x_min"], box["x_max"], box["y_min"], box["y_max"]
-                                    prob = float(np.asarray(probs[i]).squeeze())
-                                    if prob >= 0.5:
-                                        color = (0, 0, 255)
-                                        cv2.rectangle(box_img, (x_min, y_min), (x_max, y_max), color, thickness=8)
-                                        label = f"{prob:.3f}"
-                                        (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
-                                                                                     2, 3)
-                                        if x_max + 12 + text_w < box_img.shape[1]:
-                                            text_x = x_max + 12
-                                        else:
-                                            text_x = max(5, x_min - text_w - 12)
-                                        text_y = y_min + ((y_max - y_min) + text_h) // 2
-                                        cv2.putText(box_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX,
-                                                    1.5, color, 3, cv2.LINE_AA)
+                                    color = (0, 0, 255) if prob >= 0.5 else (0, 165, 255)
+                                    cv2.rectangle(box_img, (x_min, y_min), (x_max, y_max), color, thickness=8)
+                                    label = f"{prob:.3f}"
+                                    (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 2.4,
+                                                                                 5)
+                                    if x_max + 12 + text_w < box_img.shape[1]:
+                                        text_x = x_max + 12
+                                    else:
+                                        text_x = max(5, x_min - text_w - 12)
+                                    text_y = y_min + ((y_max - y_min) + text_h) // 2
+                                    cv2.putText(box_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX,
+                                                2.4, color, 5, cv2.LINE_AA)
                                 cv2.imwrite(cam_dir + data_name_tmp + "/predicted_boxes.png", box_img)
 
                             # Raw image
@@ -704,6 +738,7 @@ class MapGenerator:
                     original_img = (np.clip(original_img, 0, 1) * 255).astype(np.uint8)
                     gt_img = original_img.copy()
                     pred_img = original_img.copy()
+
                     color = (255, 0, 0)
 
                     for record in projection_gt_records:
@@ -718,7 +753,11 @@ class MapGenerator:
                         cv2.rectangle(gt_img, (x_min, y_min), (x_max, y_max), color, thickness=box_thickness)
 
                     for record in projection_records:
-                        if record["prob"] < threshold:
+                        if record["prob"] >= threshold:
+                            pred_color = (255, 0, 0)
+                        elif 0.01 < record["prob"] < threshold:
+                            pred_color = (255, 165, 0)
+                        else:
                             continue
 
                         box = record["box"]
@@ -727,7 +766,7 @@ class MapGenerator:
                         y_min = max(0, min(pred_img.shape[0] - 1, box["y_min"]))
                         y_max = max(0, min(pred_img.shape[0] - 1, box["y_max"]))
 
-                        cv2.rectangle(pred_img, (x_min, y_min), (x_max, y_max), color, thickness=box_thickness)
+                        cv2.rectangle(pred_img, (x_min, y_min), (x_max, y_max), pred_color, thickness=box_thickness)
 
                         label = f"{record['prob']:.3f}"
                         font_scale = 1.2
@@ -739,7 +778,7 @@ class MapGenerator:
                         text_y = y_min + ((y_max - y_min) + text_h) // 2
                         text_y = max(text_h + 5, min(pred_img.shape[0] - 5, text_y))
 
-                        cv2.putText(pred_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color,
+                        cv2.putText(pred_img, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, pred_color,
                                     text_thickness, cv2.LINE_AA)
 
                     axes[j, 0].imshow(gt_img)
@@ -1010,7 +1049,7 @@ if __name__ == "__main__":
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
     model_name1 = "cropped_projection_resnext50_simpler_transpose_equalize"
     trial_n1 = 2
-    use_cuda1 = False
+    use_cuda1 = True
     projection_dataset1 = True
     selected_segments1 = None
     selected_projection1 = None
@@ -1026,9 +1065,12 @@ if __name__ == "__main__":
     # Draw maps
     set_type1 = SetType.VAL
     target_classes1 = [1]
-    explainer_types1 = ["Grad-CAM"]
-    target_layers1 = ["feature_extractor.features.7.2.conv3"]#feature_extractor.features.6.5.conv3"]#"feature_extractor.features.7.2.conv3"]#, "feature_extractor.features.7.1.conv3",
+    explainer_types1 = ["Grad-CAM", "HiResCAM"]
+    target_layers1 = ["feature_extractor.features.7.1.conv3"]#feature_extractor.features.6.5.conv3"]#"feature_extractor.features.7.2.conv3"]#, "feature_extractor.features.7.1.conv3",
     desired_instances1 = None # ["032d"]#, "032l", "446l"]
+    '''desired_instances1 = {"block 1": ["474l", "378d", "405l", "281c", "413l", "297l", "170l", "093l"],
+                          "block 2": ["433d", "308c", "312l", "152l", "150l", "330l", "459d", "413d"],
+                          "block 3": ["338l", "229c", "386l", "123l", "226l", "354d", "174l", "113l"]}'''
     cams_dict1, predicted_probs_dict1, bar_ranges_dict1 = generator1.get_cam(set_type=set_type1,
                                                                              target_classes=target_classes1,
                                                                              explainer_types=explainer_types1,
@@ -1045,6 +1087,9 @@ if __name__ == "__main__":
     generator1.compute_validation_metrics(set_type=set_type1, target_classes=target_classes1,
                                           explainer_types=explainer_types1, target_layers=target_layers1,
                                           desired_instances=desired_instances1)
+
+    # Generate PDF for data selection
+    # generator1.generate_gt_prediction_pdf(set_type=set_type1, desired_instances=desired_instances1)
 
     # Textual explainer
     # generator1.get_textual_explainer()

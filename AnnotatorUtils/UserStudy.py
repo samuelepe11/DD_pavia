@@ -9,9 +9,16 @@ import datetime
 import matplotlib.pyplot as plt
 import base64
 import warnings
+
+from fontTools.unicodedata import block
+from ipywidgets import interactive
+from opt_einsum.paths import branch
+from sympy.physics.units import current
+
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 from pathlib import Path
+from matplotlib.colors import LinearSegmentedColormap
 
 # NEEDS Gradio 4.44.1
 # Classes
@@ -28,16 +35,16 @@ class SurveyCreator:
     binary_answers = ["No", "Sì"]
     sex_levels = ["Maschio", "Femmina", "Non binario", "Altro", "Preferisco non rispondere"]
     career_levels = ["Non ho ancora iniziato", "I anno", "II anno", "III anno", "IV anno", "V anno", "Ho terminato la specializzazione"]
-    likert_choices = ["Fortemente in disaccordo", "In disaccordo", "Né d'accordo né in disaccordo", "D'accordo",
+    likert_choices = ["Fortemente in disaccordo", "In disaccordo", "Parzialmente in disaccordo", "Parzialmente d'accordo", "D'accordo",
                       "Fortemente d'accordo"]
-    confidence_levels = ["Molto bassa", "Bassa", "Neutrale", "Alta", "Molto alta"]
+    confidence_levels = ["Molto bassa", "Bassa", "Abbastanza bassa", "Abbastanza alta", "Alta", "Molto alta"]
     diagnoses = ["Non ci sono fratture", "Il paziente presenta fratture"]
     branches = ["Supporto bounding-box", "Supporto heatmap (calda)", "Supporto heatmap (fredda)"]
+    colormaps = ["inferno", "gist_earth"]
 
     # Change this depending on the selected strategy
-    data_fold += "cropped_projection_resnext50_simpler_transpose_equalize/validation_single_projection_yolo_cropping/"
-    camA_name_start = "HiResCAM_feature_extractor_features_7_1_conv3_class"
-    camB_name_start = "HiResCAM_feature_extractor_features_7_2_conv3_class"
+    data_fold += "cropped_projection_resnext50_simpler_transpose_equalize/test_single_projection_yolo_cropping/"
+    cam_names = ["HiResCAM_feature_extractor_features_7_1_conv3_class", "HiResCAM_feature_extractor_features_7_2_conv3_class"]
     max_projection_number = 4
 
     # Update attributes
@@ -50,9 +57,9 @@ class SurveyCreator:
     intro_msg = """#### Istruzioni:
                    - Dovrai <span style='color:#f97316;'>effettuare l'accesso scegliendo uno username</span> (ad esempio, il tuo cognome). Questo ti consentirà di interrompere il questionario e riprenderlo successivamente, se necessario.
                    - Ti verrà somministrato un breve <span style='color:#f97316;'>questionario di profilazione</span>.
-                   - Visualizzerai i dati RX di 15 pazienti, che includono almeno due proiezioni per ognuno (antero-posteriore e/o laterale). 
-                     * <span style='color:#f97316;'>Dovrai effetturare una valutazione, eventualmente supportato dall'IA</span>: in ordine casuale valuterai (a) 5 casi senza supporto, (b) 5 casi con un supporto visivo (sistema visuale), (c) 5 casi con un supporto testuale (sistema testuale).
-                     * <span style='color:#f97316;'>Per ciascun RX dovrai fornire una diagnosi</span> - elencando se il paziente presenta fratture e, in caso, quali vertebre sono riguardate - e valutare la tua confidenza diagnostica, la complessità del caso e, solo per b e c, l'utilità del supporto.
+                   - Visualizzerai i dati RX di 24 pazienti, che includono almeno due proiezioni per ognuno (antero-posteriore e/o laterale). 
+                     * <span style='color:#f97316;'>Dovrai effetturare una valutazione, supportato dall'IA</span>: in ordine casuale valuterai (a) 8 casi con supporto diretto (bounding-box), (b) 8 casi con un supporto indiretto basato su mappa di calore a colorazione calda, (c) 8 casi con un secondo supporto indiretto basato su mappa di calore a colori freddi. Ogni sistema verrà meglio dettagliato nella schermata dedicata.
+                     * <span style='color:#f97316;'>Per ciascun RX dovrai fornire una diagnosi</span> - elencando se il paziente presenta fratture e, in caso, quali vertebre sono riguardate e dove - e valutare la tua confidenza diagnostica, la complessità del caso e l'utilità del supporto.
                    - Dopo l'utilizzo di ciascun sistema, compilerai un breve <span style='color:#f97316;'>questionario per valutare la tua esperienza complessiva</span>.
                 """
     sub_descriptions = {
@@ -60,15 +67,15 @@ class SurveyCreator:
                      "Per ogni proiezione associata al caso clinico, verranno evidenziate mediante un <span style='color:#f97316;'>riquadro rosso "
                      "solo le vertebre per cui il modello IA predice la presenza di una frattura</span>. "
                      "Per ciascuna vertebra evidenziata verrà inoltre mostrata la confidenza del modello, espressa come probabilità "
-                     "(dove 1.000 rappresenta la massima certezza).",
+                     "(dove 1.000 rappresenta la massima certezza). <span style='color:#f97316;'>Se non vedi box significa che il modello non ha rilevato alcuna frattura</span>.",
         branches[1]: branches[1] + "\n"
                      "Per ogni proiezione associata al caso clinico non verranno mostrate né la predizione del modello IA né la relativa confidenza. "
                      "Verrà invece visualizzata una <span style='color:#f97316;'>mappa di calore che evidenzia le aree dell'immagine considerate più importanti dal modello per la classificazione di 'frattura presente'</span>. "
-                     "Le aree più scure (nero/viola) indicano una minore importanza, mentre quelle più brillanti (arancione/giallo) indicano una maggiore importanza per la classificazione.",
+                     "Le aree più scure (grigio/viola) indicano una minore importanza, mentre quelle più brillanti (arancione/giallo) indicano una maggiore importanza per la classificazione.",
         branches[2]: branches[2] + "\n"
                      "Per ogni proiezione associata al caso clinico non verranno mostrate né la predizione del modello IA né la relativa confidenza. "
                      "Verrà invece visualizzata una <span style='color:#f97316;'>mappa di calore che evidenzia le aree dell'immagine considerate più importanti dal modello per la classificazione di 'frattura presente'</span>. "
-                     "Le aree più scure (viola/blu) indicano una minore importanza, mentre quelle più brillanti (verde/giallo) indicano una maggiore importanza per la classificazione."
+                     "Le aree più scure (grigio/blu) indicano una minore importanza, mentre quelli più brillanti (giallo/bianco) indicano una maggiore importanza per la classificazione."
     }
     scroll_js = """() => {
                     setTimeout(() => {
@@ -92,17 +99,29 @@ class SurveyCreator:
         self.survey_dir = self.results_dir + self.survey_fold
         if self.survey_fold[:-1] not in os.listdir(self.results_dir):
             os.mkdir(self.survey_dir)
-        self.n_instances = len(desired_instances)
-        self.desired_instances = desired_instances.copy()
-        random.shuffle(self.desired_instances)
-        print("Presented patients:")
-        for i, name in enumerate(self.desired_instances):
-            print(" " + str(i + 1) + ") " + name)
+
+        if not isinstance(desired_instances, dict):
+            self.n_instances = len(desired_instances)
+            self.desired_instances = desired_instances.copy()
+            random.shuffle(self.desired_instances)
+            print("Presented patients:")
+            for i, name in enumerate(self.desired_instances):
+                print(" " + str(i + 1) + ") " + name)
+        else:
+            self.n_instances = len(desired_instances["block 1"]) * 3
+            self.desired_instances = {}
+            for k, v in desired_instances.items():
+                print(k.upper() + ":")
+                block = v.copy()
+                random.shuffle(block)
+                self.desired_instances.update({k: block})
+                for i, name in enumerate(block):
+                    print(" " + str(i + 1) + ") " + name)
         self.debug_mode = debug_mode
 
     def avoid_clear_action(self, proj_idx, state_dict):
         img, exp = self.get_img(state_dict=state_dict, proj_idx=proj_idx)
-        img = self.overlap_input(img, exp)
+        img = self.overlap_input(img, exp, state_dict)
         img_display = gr.update(value=img)
         bright = self.normal_scale_value
         contrast = self.normal_scale_value
@@ -144,7 +163,7 @@ class SurveyCreator:
 
         # Hide/show evidence
         if not adjust_specifics[proj_idx, 3]:
-            img = self.overlap_input(img, exp)
+            img = self.overlap_input(img, exp, state_dict)
 
         img_display = gr.update(value=img)
         return img_display
@@ -186,9 +205,12 @@ class SurveyCreator:
         return img_display, state_dict
 
     def show_evidence(self, bright, contrast, state_dict, proj_idx):
+        support_click_times = state_dict["support_click_times"]
+        support_click_times[proj_idx].append(datetime.datetime.now().isoformat(timespec="milliseconds"))
         adjust_specifics = state_dict["adjust_specifics"]
         adjust_specifics[proj_idx, 3] = 1 - adjust_specifics[proj_idx, 3]
-        state_dict.update({"adjust_specifics": adjust_specifics})
+        state_dict.update({"adjust_specifics": adjust_specifics, "support_click_times": support_click_times})
+
         img_display = self.adjust_img(bright=bright, contrast=contrast, state_dict=state_dict, proj_idx=proj_idx)
         if not adjust_specifics[proj_idx, 3]:
             show = gr.update(value="Nascondi supporto decisionale", icon="icons/lightbulb_off.png")
@@ -208,7 +230,28 @@ class SurveyCreator:
             img = np.zeros((1000, 500))
             base_path = None
         else:
-            desired_instance = desired_instances[count]
+            if isinstance(desired_instances, dict):
+                try:
+                    current_branch = state_dict["current_branch"]
+                    branches_order = state_dict["branches_order"]
+                except TypeError:
+                    current_branch = None
+                    branches_order = None
+                block_idx = branches_order.index(current_branch)
+                try:
+                    desired_instances = list(desired_instances.values())[block_idx]
+                    count_eff = count - block_idx * self.n_instances // 3
+                    desired_instance = desired_instances[count_eff]
+                    flag = False
+                except IndexError:
+                    block_idx += 1
+                    desired_instances = list(state_dict["desired_instances"].values())[block_idx]
+                    count_eff = count - block_idx * self.n_instances // 3
+                    desired_instance = desired_instances[count_eff]
+                    flag = True
+            else:
+                desired_instance = desired_instances[count]
+
             base_path = self.data_dir + desired_instance + "_proj" + str(proj_idx)
             if not os.path.isfile(base_path + "/raw_image.png"):
                 raise ImageReadError("Instance does not exist: " + base_path)
@@ -220,20 +263,34 @@ class SurveyCreator:
         # AI-support extra operations
         try:
             current_branch = state_dict["current_branch"]
+            cam_order = state_dict["cam_order"]
         except TypeError:
             current_branch = None
-        if current_branch is None or base_path is None:
+            cam_order = None
+        if current_branch is None or base_path is None or flag:
             return img, img
         else:
             if current_branch == self.branches[0]:
                 exp_name = base_path + "/predicted_boxes.png"
                 cmap = None
             elif current_branch == self.branches[1]:
-                exp_name = base_path + "/" + self.camA_name_start + str(1) + ".png"
+                exp_name = base_path + "/" + cam_order[0] + str(1) + ".png"
                 cmap = "inferno"
+                gist_earth_linear = None
             else:
-                exp_name = base_path + "/" + self.camB_name_start + str(1) + ".png"
-                cmap = "viridis"
+                exp_name = base_path + "/" + cam_order[1] + str(1) + ".png"
+                cmap = "gist_earth"
+
+                # Adjust map brightness
+                base_cmap = plt.get_cmap("gist_earth")
+                x = np.linspace(0, 1, 1024)
+                rgb = base_cmap(x)[:, :3]
+                rgb_linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+                luminance = 0.2126 * rgb_linear[:, 0] + 0.7152 * rgb_linear[:, 1] + 0.0722 * rgb_linear[:, 2]
+                luminance = np.maximum.accumulate(luminance)
+                target_luminance = np.linspace(luminance[0], luminance[-1], 256)
+                new_x = np.interp(target_luminance, luminance, x)
+                gist_earth_linear = LinearSegmentedColormap.from_list("gist_earth_linear", base_cmap(new_x))
             if cmap is None:
                 exp = cv2.imread(exp_name, cv2.IMREAD_COLOR)
                 exp = cv2.cvtColor(exp, cv2.COLOR_BGR2RGB)
@@ -245,7 +302,8 @@ class SurveyCreator:
             else:
                 if cmap is not None:
                     exp = exp / np.max(exp)
-                    exp = plt.get_cmap(cmap)(exp)[:, :, :3]
+                    selected_cmap = gist_earth_linear if cmap == "gist_earth" else plt.get_cmap(cmap)
+                    exp = selected_cmap(exp)[:, :, :3]
                     exp = (exp * 255).astype(np.uint8)
 
             # Outdated case
@@ -309,42 +367,91 @@ class SurveyCreator:
                     branches_order += list(set(self.branches) - set(branches_order))
             except IndexError:
                 branches_order = None
+            try:
+                cam_order = results_file["cam"].dropna().unique().tolist()
+                if len(cam_order) == 0:
+                    cam_order = None
+                else:
+                    cam_order += list(set(self.cam_names) - set(cam_order))
+            except IndexError:
+                cam_order = None
         else:
-            results_file = pd.DataFrame(columns=["index", "instance", "annotator", "group", "diagnosis", "location",
+            results_file = pd.DataFrame(columns=["index", "instance", "annotator", "group", "cam", "diagnosis", "location",
                                                  "confidence", "complexity", "usefulness", "time"])
             results_file.to_csv(user_folder + self.results_file_name, index=False)
             count = 0
             branches_order = None
+            cam_order = None
         if self.debug_mode:
             print("==============================")
             print("Initial count:", count)
 
-        # Shuffle instances
-        try:
-            evaluated_instances = results_file["instance"].unique().tolist()
-            remaining_instances = list(set(self.desired_instances) - set(evaluated_instances))
-        except IndexError:
-            evaluated_instances = []
-            remaining_instances = self.desired_instances
+        # Read previously-evaluated instances
+        if not isinstance(self.desired_instances, dict):
+            try:
+                evaluated_instances = results_file["instance"].unique().tolist()
+                remaining_instances = list(set(self.desired_instances) - set(evaluated_instances))
+            except KeyError:
+                evaluated_instances = []
+                remaining_instances = self.desired_instances
+        else:
+            # Reorder blocks
+            user_seed = hash(name) % 1_000_000
+            rng = random.Random(user_seed)
+            items = list(self.desired_instances.items())
+            rng.shuffle(items)
+            self.desired_instances = dict(items)
+
+            # Read ordered blocks
+            try:
+                branches = results_file["branch"].dropna().unique().tolist()
+                evaluated_instances = {list(self.desired_instances.keys())[i]: results_file.loc[
+                    results_file["branch"] == branch, "instance"].dropna().unique().tolist()
+                                       for i, branch in enumerate(branches)}
+                remaining_instances = {k: list(set(v) - set(evaluated_instances[k]))
+                                       for k, v in self.desired_instances.items()}
+            except KeyError:
+                evaluated_instances = {k: [] for k in self.desired_instances.keys()}
+                remaining_instances = self.desired_instances
+
+        # Shuffle remaining instances
         user_seed = hash(name) % 1_000_000
         rng = random.Random(user_seed)
-        rng.shuffle(remaining_instances)
-        desired_instances = evaluated_instances + remaining_instances
+        if not isinstance(self.desired_instances, dict):
+            rng.shuffle(remaining_instances)
+            desired_instances = evaluated_instances + remaining_instances
+        else:
+            desired_instances = {}
+            for k, v in remaining_instances.items():
+                v_tmp = v.copy()
+                rng.shuffle(v_tmp)
+                desired_instances.update({k: evaluated_instances[k] + v_tmp})
         state_dict.update({"desired_instances": desired_instances})
         if self.debug_mode:
             print("Instances for '" + name + "':")
-            for i, instance in enumerate(desired_instances):
-                print(" " + str(i + 1) + ") " + instance)
+            if not isinstance(self.desired_instances, dict):
+                for i, instance in enumerate(desired_instances):
+                    print(" " + str(i + 1) + ") " + instance)
+            else:
+                for k, v in desired_instances.items():
+                    print(k.upper() + ":")
+                    for i, instance in enumerate(v):
+                        print(" " + str(i + 1) + ") " + instance)
 
         # Define user branch
         if branches_order is None:
             user_seed = hash(name) % 1_000_000
             rng = random.Random(user_seed)
             branches_order = rng.sample(self.branches, k=len(self.branches))
-        state_dict.update({"branches_order": branches_order})
+        if cam_order is None:
+            user_seed = hash(name) % 1_000_000
+            rng = random.Random(user_seed)
+            cam_order = rng.sample(self.cam_names, k=len(self.cam_names))
+        state_dict.update({"branches_order": branches_order, "cam_order": cam_order})
 
         if self.debug_mode:
-            print("User '" + name + "' is assigned to the following group order:", branches_order)
+            print("User '" + name + "' is assigned to the following group order:", branches_order, "with CAM order",
+                  cam_order)
 
         tab1 = self.avoid_interaction
         tab2 = gr.update()
@@ -362,7 +469,7 @@ class SurveyCreator:
             # Go to final questionnaire C
             tab4 = self.allow_interaction
             selected = 4
-            state_dict.update({"current_branch": state_dict["branches_order"][2]})
+            state_dict.update({"current_branch": state_dict["branches_order"][2], "preliminary_flag": True})
             performance_flag = True
         elif "final_questionnaire.csv" in os.listdir(user_folder) and pd.read_csv(user_folder + "final_questionnaire.csv").shape[0] == 2:
             # Go to branch C
@@ -375,7 +482,7 @@ class SurveyCreator:
             # Go to final questionnaire B
             tab4 = self.allow_interaction
             selected = 4
-            state_dict.update({"current_branch": state_dict["branches_order"][1]})
+            state_dict.update({"current_branch": state_dict["branches_order"][1], "preliminary_flag": True})
         elif "final_questionnaire.csv" in os.listdir(user_folder) and pd.read_csv(user_folder + "final_questionnaire.csv").shape[0] == 1:
             # Go to branch B
             tab3 = self.allow_interaction
@@ -386,7 +493,7 @@ class SurveyCreator:
             # Go to final questionnaire A
             tab4 = self.allow_interaction
             selected = 4
-            state_dict.update({"current_branch": state_dict["branches_order"][0]})
+            state_dict.update({"current_branch": state_dict["branches_order"][0], "preliminary_flag": True})
         elif "preliminary_questionnaire.csv" in os.listdir(user_folder):
             # Go to branch A
             tab3 = self.allow_interaction
@@ -409,7 +516,7 @@ class SurveyCreator:
                                    label="Quale modalità di support hai preferito?", visible=True)
             preference_txt = gr.update(visible=True)
         if descr_flag:
-            sub_descr = (f"#### Sistema {branches_order.index(state_dict['current_branch']) + 1}/{len(self.branches)} - " +
+            sub_descr = (f"## Sistema {branches_order.index(state_dict['current_branch']) + 1}/{len(self.branches)} - " +
                          self.sub_descriptions[state_dict["current_branch"]])
 
         state_dict.update({"count": count})
@@ -457,18 +564,38 @@ class SurveyCreator:
         for i in range(self.max_projection_number):
             try:
                 img, exp = self.get_img(state_dict=state_dict, proj_idx=i)
+                interactive = True
             except ImageReadError:
                 img, exp = self.get_img(first_display=True)
-            img_tmp = gr.update(value=self.overlap_input(img, exp)) if img is not None else gr.update()
-            img_blocks += (5 * [self.allow_interaction] + [gr.update(icon="icons/lightbulb_on.png"), img_tmp])
+                interactive = False
+            img_tmp = gr.update(value=self.overlap_input(img, exp, state_dict)) if img is not None else gr.update()
+            img_blocks += (5 * [gr.update(interactive=interactive)] +
+                           [gr.update(icon="icons/lightbulb_off.png", interactive=interactive), img_tmp])
         return img_blocks
 
     def next(self, state_dict, diagnosis, location, confidence, complexity, usefulness):
+        current_time = datetime.datetime.now().isoformat(timespec="milliseconds")
         name = state_dict["name"]
         count = state_dict["count"]
         preliminary_flag = state_dict["preliminary_flag"]
         avoid_subsequent_next = state_dict["avoid_subsequent_next"]
         desired_instances = state_dict["desired_instances"]
+
+        # Save hide/show click times
+        support_click_times = state_dict["support_click_times"]
+        support_clicks = ""
+        for i, sct in enumerate(support_click_times):
+            sct.append(current_time)
+            addon = "\n" if i != 0 else ""
+            support_clicks += addon + "proj" + str(i) + ": " + "; ".join(sct)
+
+        if isinstance(self.desired_instances, dict):
+            current_branch = state_dict["current_branch"]
+            branches_order = state_dict["branches_order"]
+            block_idx = branches_order.index(current_branch)
+            desired_instances = list(desired_instances.values())[block_idx]
+        else:
+            block_idx = 0
 
         if self.debug_mode and not preliminary_flag and not avoid_subsequent_next:
             print("------------------------------")
@@ -496,14 +623,29 @@ class SurveyCreator:
                 comp = self.confidence_levels[complexity] if complexity is not None else None
                 usef = self.confidence_levels[usefulness] if usefulness is not None else None
                 img_blocks = self.get_image_blocks(state_dict)
+                state_dict.update({"support_click_times": support_click_times})
                 return (state_dict, gr.update(value=diag), location, gr.update(value=conf), gr.update(value=comp),
                         gr.update(value=usef), gr.update(), gr.update(), gr.update(), *img_blocks)
             if self.debug_mode:
                 print("Storing image results for image", count, "\n")
-            new_row = {"index": count, "instance": desired_instances[count], "annotator": name,
-                       "group": state_dict["current_branch"], "diagnosis": int(diagnosis), "location": location,
+            if isinstance(self.desired_instances, dict):
+                count_eff = count - block_idx * self.n_instances // 3
+            else:
+                count_eff = count
+            current_branch = state_dict["current_branch"]
+
+            # Set CAM name
+            if current_branch == self.branches[0]:
+                cam = np.nan
+            elif current_branch == self.branches[1]:
+                cam = state_dict["cam_order"][0]
+            else:
+                cam = state_dict["cam_order"][1]
+
+            new_row = {"index": count, "instance": desired_instances[count_eff], "annotator": name,
+                       "group": current_branch, "cam": cam, "diagnosis": int(diagnosis), "location": location,
                        "confidence": int(confidence), "complexity": int(complexity), "usefulness": int(usefulness),
-                       "time": datetime.datetime.now()}
+                       "time": datetime.datetime.now(), "support_clicks": support_clicks}
             results_file = pd.concat([results_file, pd.DataFrame([new_row])], ignore_index=True)
             results_file.to_csv(file_path, index=False)
 
@@ -516,14 +658,18 @@ class SurveyCreator:
             tab3 = self.avoid_interaction
             tab4 = self.allow_interaction
             tabs = gr.update(selected=4)
+        state_dict.update({"count": count})
         img_blocks = self.get_image_blocks(state_dict)
 
-        state_dict.update({"count": count, "preliminary_flag": False,
+        state_dict.update({"preliminary_flag": False,
                           "adjust_specifics": np.zeros((self.max_projection_number, 4))})
         if self.debug_mode and not preliminary_flag and not avoid_subsequent_next:
             print("------------------------------")
             print("Count at 'next' end:", count)
             print("------------------------------")
+
+        current_time = datetime.datetime.now().isoformat(timespec="milliseconds")
+        state_dict.update({"support_click_times": [[current_time] for _ in range(self.max_projection_number)]})
         return (state_dict, gr.update(value=None), gr.update(value=""), gr.update(value=None), gr.update(value=None),
                 gr.update(value=None), tabs, tab3, tab4, *img_blocks)
                 
@@ -541,7 +687,7 @@ class SurveyCreator:
         values = [name, q11, q14, q22, q23, q31, q32, q41, q51, current_branch, preference, preference_txt, datetime.datetime.now()]
 
         if (q11 is None or q14 is None or q22 is None or q23 is None or q31 is None or q32 is None or q41 is None
-                or q51 is None or (ask_preference and preference is None)):
+                or q51 is None or (ask_preference and (preference is None or preference_txt == ""))):
             gr.Warning("ATTENZIONE! Completa tutti i campi del questionario prima di procedere.")
             q11 = self.likert_choices[q11] if q11 is not None else None
             q14 = self.likert_choices[q14] if q14 is not None else None
@@ -551,9 +697,8 @@ class SurveyCreator:
             q32 = self.likert_choices[q32] if q32 is not None else None
             q41 = self.likert_choices[q41] if q41 is not None else None
             q51 = self.likert_choices[q51] if q51 is not None else None
-            preference = branches_order[preference] if preference is not None else None
             return (state_dict, gr.update(), gr.update(), gr.update(), gr.update(), q11, q14, q22, q23, q31, q32, q41,
-                    q51, preference_msg, preference, preference_txt, gr.update())
+                    q51, preference_msg, preference, preference_txt, gr.update(), gr.update())
         df = pd.DataFrame([values], columns=titles)
         if current_branch != branches_order[0]:
             df_old = pd.read_csv(user_folder + "final_questionnaire.csv")
@@ -577,13 +722,16 @@ class SurveyCreator:
             else:
                 state_dict.update({"current_branch": branches_order[1]})
 
-        sub_descr = (f"#### Sistema {branches_order.index(state_dict['current_branch']) + 1}/{len(self.branches)} - " +
+        sub_descr = (f"## Sistema {branches_order.index(state_dict['current_branch']) + 1}/{len(self.branches)} - " +
                      self.sub_descriptions[state_dict["current_branch"]])
         state_dict.update({"preliminary_flag": True})
         if self.debug_mode:
             print("------------------------------")
             print("Count at 'conclude' end:", state_dict["count"])
             print("------------------------------")
+
+        current_time = datetime.datetime.now().isoformat(timespec="milliseconds")
+        state_dict.update({"support_click_times": [[current_time] for _ in range(self.max_projection_number)]})
         return (state_dict, tabs, tab3, tab4, tab5, gr.update(value=None), gr.update(value=None),
                 gr.update(value=None), gr.update(value=None), gr.update(value=None), gr.update(value=None),
                 gr.update(value=None), gr.update(value=None), preference_msg, preference, preference_txt, sub_descr,
@@ -592,7 +740,8 @@ class SurveyCreator:
     def display_tabs(self, block):
         state_dict = gr.State({"count": 0, "branches_order": None, "current_branch": self.branches[0],
                                "adjust_specifics": np.zeros((self.max_projection_number, 4)), "preliminary_flag": False,
-                               "avoid_subsequent_next": False, "desired_instances": self.desired_instances})
+                               "avoid_subsequent_next": False, "desired_instances": self.desired_instances,
+                               "support_click_times": [[] for _ in range(self.max_projection_number)], "cam_order": None})
         with gr.Tabs(selected=1) as tabs:
             with gr.Tab(id=1, label="Autenticazione", interactive=True) as tab1:
                 gr.Markdown("### Accedi con il tuo cognome...")
@@ -630,18 +779,23 @@ class SurveyCreator:
                                                                          "lavoro o studio possa aumentare la mia "
                                                                          "produttività", type="index")
                     with gr.Row():
-                        q5 = gr.Radio(choices=self.binary_answers, label="Credo che con l'aiuto dell'IA I believe io "
+                        q5 = gr.Radio(choices=self.binary_answers, label="Credo che con l'aiuto dell'IA io "
                                                                          "possa migliorare l'efficacia del mio lavoro.",
                                       type="index")
                 start_btn = gr.Button(value="Inizia", icon="icons/next.png", variant="primary")
 
             with gr.Tab(id=3, label="Esercizio di Diagnosi", interactive=False, elem_id="tab3") as tab3:
                 with gr.Row():
-                    gr.Markdown("### Suggerisci una diagnosi per ogni paziente.\nRicorda che, oltre ai bottoni presenti "
-                                "sopra ogni immagine, puoi utilizzare il tourchpad del tuo laptop per ingrandire o "
-                                "rimpicciolire l'immagine.")
-                with gr.Row():
                     sub_descr = gr.Markdown("")
+                with gr.Row():
+                    gr.Markdown("### Suggerisci una diagnosi per ogni paziente.\n"
+                                "Se il supporto decisionale non ti consente di visualizzare correttamente "
+                                "l'immagine, puoi <span style='color:#f97316;'>nasconderlo (e farlo riapparire)</span>"
+                                " con l'apposito tasto sopra di essa. Ricorda che, oltre ai bottoni presenti sopra ogni "
+                                "immagine, puoi utilizzare il tourchpad del tuo laptop per "
+                                "<span style='color:#f97316;'>ingrandire o rimpicciolire</span> l'immagine. "
+                                "ATTENZIONE: tutti i campi sono obbligatori, ad eccezione del campo testuale in caso di"
+                                " assenza di frattura.")
                 with gr.Row():
                     img_blocks = []
                     for i in range(self.max_projection_number):
@@ -649,7 +803,7 @@ class SurveyCreator:
                             # Get image
                             gr.HTML("<h3 style='text-align:center;'>PROIEZIONE " + str(i + 1) + "</h3>")
                             img, _ = self.get_img(first_display=True)
-                            interactive = True
+                            interactive = False
                             proj_id = gr.State(i)
 
                             # Add adjust brightness and contrast sliders
@@ -681,7 +835,8 @@ class SurveyCreator:
                                 img_blocks.append(flip_horiz)
 
                             # Add show evidence button
-                            show = gr.Button(value="Nascondi supporto decisionale", icon="icons/lightbulb_off.png")
+                            show = gr.Button(value="Nascondi supporto decisionale", icon="icons/lightbulb_off.png",
+                                             interactive=interactive)
                             img_blocks.append(show)
 
                             # Add image display
@@ -719,20 +874,21 @@ class SurveyCreator:
                                                                                         "confidenza del selezionare "
                                                                                         "la diagnosi?", type="index")
                         with gr.Row():
-                            complexity = gr.Radio(choices=self.confidence_levels, label="A quanto stimeresti la "
+                            complexity = gr.Radio(choices=self.confidence_levels, label="Come stimeresti la "
                                                                                         "complessità di questo caso "
                                                                                         "clinico?", type="index")
                         with gr.Row():
-                            usefulness = gr.Radio(choices=self.confidence_levels, label="A quanto stimeresti l'utilità "
+                            usefulness = gr.Radio(choices=self.confidence_levels, label="Come stimeresti l'utilità "
                                                                                         "del supporto fornito?",
                                                   type="index")
                 next = gr.Button(value="Prossimo caso", icon="icons/next.png", variant="primary")
 
             with gr.Tab(id=4, label="Feedback sul Sistema Utilizzato", interactive=False, elem_id="tab4") as tab4:
-                gr.Markdown("### Compila il seguente questionario")
+                with gr.Row():
+                    sub_descr1 = gr.Markdown("")
+                with gr.Row():
+                    gr.Markdown("### Compila il seguente questionario")
                 with gr.Column(min_width=500):
-                    with gr.Row():
-                        sub_descr1 = gr.Markdown("")
                     gr.Markdown("#### Competenza Percepita")
                     with gr.Row():
                         q11 = gr.Radio(choices=self.likert_choices, label="Penso di aver svolto bene il compito di "
@@ -740,13 +896,13 @@ class SurveyCreator:
                                        type="index")
                     with gr.Row():
                         q14 = gr.Radio(choices=self.likert_choices, label="Dopo aver svolto questo compito per un po', "
-                                                                          "mi sono sentito/a piuttosto competente.",
+                                                                          "mi sono sentito/a piuttosto competente in questo"
+                                                                          " compito diagnostico.",
                                        type="index")
                     gr.Markdown("#### Autonomia Percepita")
                     with gr.Row():
-                        q22 = gr.Radio(choices=self.likert_choices, label="Ero libero/a di scegliere la diagnosi che "
-                                                                          "ritenevo più appropriata tra le due possibili"
-                                                                          " per i casi mostrati.", type="index")
+                        q22 = gr.Radio(choices=self.likert_choices, label="Mi sono sentito libero/a di scegliere la diagnosi che "
+                                                                          "ritenevo più appropriata.", type="index")
                     with gr.Row():
                         q23 = gr.Radio(choices=self.likert_choices, label="Mi sono sentito/a fortemente influenzato/a "
                                                                           "dall'IA nel modo in cui raccomandavo le "
@@ -758,7 +914,7 @@ class SurveyCreator:
                     with gr.Row():
                         q32 = gr.Radio(choices=self.likert_choices, label="Ho avuto la sensazione che il mio ragionamento"
                                                                           " in questo compito fosse distante da quello "
-                                                                          "del sistiema basato su IA fornitomi.",
+                                                                          "del sistema basato su IA fornitomi.",
                                        type="index")
                     gr.Markdown("#### Coinvolgimento")
                     with gr.Row():
@@ -771,13 +927,13 @@ class SurveyCreator:
                     preference_msg = gr.Markdown("#### Preferenza sul Sistema", visible=False)
                     with gr.Row():
                         preference = gr.Radio(choices=self.branches + ["Non ho preferenze"],
-                                              label=("Quale sistema hai preferito? RICORDA che i sistemi sono elencati qui sotto "
-                                                     "nell'ordine in cui li hai utilizzati. I due sistemi con mappa di calore sono generati "
-                                                     "da algoritmi completamente diversi: il colore serve unicamente a distinguerli "
-                                                     "visivamente e verrà modificato nella versione definitiva."),
+                                              label=("Quale sistema hai preferito? NON BASARTI SUI COLORI UTILIZZATI: i due sistemi "
+                                                     "con mappa di calore sono generati da algoritmi completamente diversi, il "
+                                                     "colore serve unicamente a distinguerli visivamente e verrà modificato nella "
+                                                     "versione definitiva."),
                                               visible=False)
                     with gr.Row():
-                        preference_txt = gr.Textbox(label="Spiega brevemente la tua scelta (opzionale)",
+                        preference_txt = gr.Textbox(label="Spiega brevemente la tua scelta",
                                                     placeholder="Es. sistema meno complesso, spiegazioni più chiare...",
                                                     visible=False, lines=3)
                 conclude = gr.Button(value="Concludi sezione", icon="icons/next.png", variant="primary")
@@ -835,11 +991,12 @@ class SurveyCreator:
     def show_location(diagnosis):
         return gr.update(interactive=diagnosis == 1)
 
-    @staticmethod
-    def overlap_input(img, exp):
+    def overlap_input(self, img, exp, state_dict):
+        current_branch = state_dict["current_branch"]
+        alpha = 0.3 if current_branch != self.branches[0] else 0.5
         if not np.all(img == 0):
             exp = cv2.resize(exp, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
-            img = np.clip(0.7 * img + 0.3 * exp, 0, 255).astype(np.uint8)
+            img = np.clip((1.0 - alpha) * img + alpha * exp, 0, 255).astype(np.uint8)
         return img
 
 
@@ -853,8 +1010,14 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    desired_instances1 = ["032d", "032l", "446l"]#["308c", "370s", "093l", "354d"]
-    debug_mode1 = True
+    '''desired_instances1 = ["032d", "039c", "032l", "040d", "446l", "100c"]
+    desired_instances1 = {"block 1": ["032d", "039c"],
+                          "block 2": ["032l", "040d"],
+                          "block 3": ["446l", "100c"]}'''
+    desired_instances1 = {"block 1": ["474l", "378d", "405l", "281c", "413l", "297l", "170l", "093l"],
+                          "block 2": ["433d", "308c", "312l", "152l", "150l", "330l", "459d", "413d"],
+                          "block 3": ["338l", "229c", "386l", "123l", "226l", "354d", "174l", "113l"]}
+    debug_mode1 = False
     share1 = True
 
     # Launch app
