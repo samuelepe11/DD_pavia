@@ -192,6 +192,7 @@ class XrayDataset(Dataset):
         plt.subplot(1, 3, 1)
         frac_pt = len(XrayDataset.get_fracture_patients(self.patient_data))
         healthy_pt = n_pt - frac_pt
+        print("     Fracture Patients:", frac_pt)
         XrayDataset.draw_pie_plot([healthy_pt, frac_pt], self.classes, "Fractures per patient", None)
 
         # Count segments
@@ -229,6 +230,7 @@ class XrayDataset(Dataset):
         n_healthy_projections = n_projections - n_frac_projections
         XrayDataset.draw_pie_plot([n_healthy_projections, n_frac_projections], self.classes,
                                   "Fractures per projection", None)
+        print("     Fractures per projection:", n_frac_projections)
 
         plt.savefig(self.preliminary_dir + "frac_distributions.jpg")
         plt.close()
@@ -804,7 +806,7 @@ if __name__ == "__main__":
     # dataset1.count_data()
 
     # Load an already split datasets
-    dataset_name1 = "xray_dataset_training"
+    dataset_name1 = "cropped_xray_dataset_validation"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
                                         selected_projection=None)
 

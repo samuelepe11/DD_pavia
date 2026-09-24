@@ -34,7 +34,7 @@ class SurveyCreator:
     results_file_name = "survey_results.csv"
     binary_answers = ["No", "Sì"]
     sex_levels = ["Maschio", "Femmina", "Non binario", "Altro", "Preferisco non rispondere"]
-    career_levels = ["Non ho ancora iniziato", "I anno", "II anno", "III anno", "IV anno", "V anno", "Ho terminato la specializzazione"]
+    career_levels = ["Non ho ancora iniziato", "I anno", "II anno", "III anno", "IV anno", "Ho terminato la specializzazione"]
     likert_choices = ["Fortemente in disaccordo", "In disaccordo", "Parzialmente in disaccordo", "Parzialmente d'accordo", "D'accordo",
                       "Fortemente d'accordo"]
     confidence_levels = ["Molto bassa", "Bassa", "Abbastanza bassa", "Abbastanza alta", "Alta", "Molto alta"]
@@ -282,15 +282,24 @@ class SurveyCreator:
                 cmap = "gist_earth"
 
                 # Adjust map brightness
-                base_cmap = plt.get_cmap("gist_earth")
-                x = np.linspace(0, 1, 1024)
-                rgb = base_cmap(x)[:, :3]
-                rgb_linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
-                luminance = 0.2126 * rgb_linear[:, 0] + 0.7152 * rgb_linear[:, 1] + 0.0722 * rgb_linear[:, 2]
-                luminance = np.maximum.accumulate(luminance)
-                target_luminance = np.linspace(luminance[0], luminance[-1], 256)
-                new_x = np.interp(target_luminance, luminance, x)
-                gist_earth_linear = LinearSegmentedColormap.from_list("gist_earth_linear", base_cmap(new_x))
+                def match_cmap_luminance(source_name, reference_name="inferno", n=256):
+                    x = np.linspace(0, 1, 2048)
+                    source = plt.get_cmap(source_name)
+                    reference = plt.get_cmap(reference_name)
+                    source_rgb = source(x)[:, :3]
+                    source_lin = np.where(source_rgb <= 0.04045, source_rgb / 12.92,
+                                          ((source_rgb + 0.055) / 1.055) ** 2.4)
+                    source_lum = 0.2126 * source_lin[:, 0] + 0.7152 * source_lin[:, 1] + 0.0722 * source_lin[:, 2]
+                    source_lum = np.maximum.accumulate(source_lum)
+                    t = np.linspace(0, 1, n)
+                    ref_rgb = reference(t)[:, :3]
+                    ref_lin = np.where(ref_rgb <= 0.04045, ref_rgb / 12.92, ((ref_rgb + 0.055) / 1.055) ** 2.4)
+                    ref_lum = 0.2126 * ref_lin[:, 0] + 0.7152 * ref_lin[:, 1] + 0.0722 * ref_lin[:, 2]
+                    ref_lum = np.clip(ref_lum, source_lum.min(), source_lum.max())
+                    source_x = np.interp(ref_lum, source_lum, x)
+                    return LinearSegmentedColormap.from_list(f"{source_name}_matched", source(source_x))
+                gist_earth_linear = match_cmap_luminance("gist_earth", "inferno")
+
             if cmap is None:
                 exp = cv2.imread(exp_name, cv2.IMREAD_COLOR)
                 exp = cv2.cvtColor(exp, cv2.COLOR_BGR2RGB)
@@ -756,9 +765,9 @@ class SurveyCreator:
                     with gr.Row():
                         career = gr.Radio(choices=self.career_levels, label="A che anno di specializzazione sei?")
                     with gr.Row():
-                        expertise = gr.Number(label="Approssimativamente, quante diagnosi di fratture vertebrali con "
-                                                    "immagini RX hai effettato nella tua cariera?",
-                                              step=1, precision=0)
+                        expertise = gr.Number(label="Approssimativamente, quante immagini RX del rachide hai valuato"
+                                                    " nella tua carriera?",
+                                              step=10, precision=0)
                     gr.Markdown("#### Familiarità con l'IA")
                     with gr.Row():
                         q1 = gr.Radio(choices=self.binary_answers, label="Ho una buona conoscenza sull'IA.", type="index")
@@ -989,7 +998,7 @@ class SurveyCreator:
 
     def overlap_input(self, img, exp, state_dict):
         current_branch = state_dict["current_branch"]
-        alpha = 0.3 if current_branch != self.branches[0] else 0.5
+        alpha = 0.4 if current_branch != self.branches[0] else 0.5
         if not np.all(img == 0):
             exp = cv2.resize(exp, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
             img = np.clip((1.0 - alpha) * img + alpha * exp, 0, 255).astype(np.uint8)
@@ -1006,14 +1015,10 @@ if __name__ == "__main__":
     # Define variables
     # working_dir1 = "./../../"
     working_dir1 = "/media/admin/WD_Elements/Samuele_Pe/DonaldDuck_Pavia/"
-    '''desired_instances1 = ["032d", "039c", "032l", "040d", "446l", "100c"]
-    desired_instances1 = {"block 1": ["032d", "039c"],
-                          "block 2": ["032l", "040d"],
-                          "block 3": ["446l", "100c"]}'''
     desired_instances1 = {"block 1": ["474l", "378d", "405l", "281c", "413l", "297l", "170l", "093l"],
                           "block 2": ["433d", "308c", "312l", "152l", "150l", "330l", "459d", "413d"],
                           "block 3": ["338l", "229c", "386l", "123l", "226l", "354d", "174l", "113l"]}
-    debug_mode1 = False
+    debug_mode1 = True
     share1 = True
 
     # Launch app
