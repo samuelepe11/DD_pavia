@@ -600,6 +600,9 @@ class XrayDataset(Dataset):
 
         # Correct mistakes in previously stored classes
         dataset.working_dir = working_dir
+        dataset.data_dir = working_dir + dataset.data_fold
+        dataset.results_dir = working_dir + dataset.results_fold
+        dataset.preliminary_dir = dataset.results_dir + dataset.preliminary_fold
         for attr in dataset.__dict__.keys():
             val = dataset.__dict__[attr]
             if isinstance(val, str):
@@ -809,6 +812,7 @@ if __name__ == "__main__":
     dataset_name1 = "cropped_xray_dataset_validation"
     dataset1 = XrayDataset.load_dataset(working_dir=working_dir1, dataset_name=dataset_name1, selected_segments=None,
                                         selected_projection=None)
+    dataset1.count_data()
 
     # Show items
     ind1 = 1

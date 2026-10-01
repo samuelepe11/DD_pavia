@@ -534,6 +534,23 @@ stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], grou
 stats_c <- stat_compare(usefulness_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
 plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = 2.5, do_violin = TRUE)
 
+# Compare perceived complexity
+cat("\n---------------------------------------------------------------------------------------------------------------------\n")
+var_name = "Complexity"
+usefulness_summary <- summarise_data(survey_results, var_name)
+cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
+stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "two.sided", random_mu = 2.5)
+stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "greater", random_mu = 2.5)
+stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "two.sided", random_mu = 2.5)
+stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "greater", random_mu = 2.5)
+stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "two.sided", random_mu = 2.5)
+stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "greater", random_mu = 2.5)
+stats_a <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
+stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
+stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "greater")
+stats_c <- stat_compare(usefulness_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
+plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = 2.5, do_violin = TRUE)
+
 # Time comparison
 cat("\n---------------------------------------------------------------------------------------------------------------------\n")
 var_name = "Duration"
