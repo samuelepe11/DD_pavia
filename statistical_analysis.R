@@ -59,7 +59,9 @@ cams <- c("HiResCAM_feature_extractor_features_7_1_conv3_class", "HiResCAM_featu
 
 stratification_levels <- c("Simple cases", "Complex cases", "Cases deemed simple", "Cases deemed complex", 
                            "Support deemed unuseful", "Support deemed useful", "Non-experts", "Experts", 
-                           "Familiar residents", "Unfamiliar residents", "Fast evaluators", "Slow evaluators", "AI wrong", "AI right")
+                           "Familiar residents", "Unfamiliar residents", "Fast evaluators", "Slow evaluators", "AI wrong", 
+                           "AI right")
+
 
 ############################################################################################################################
 # FUNCTIONS
@@ -75,8 +77,8 @@ plot_population <- function(data, var, title) {
       geom_col(width = 1, color = "white") + coord_polar(theta = "y") +
       geom_text(aes(label = sprintf("%d (%.1f%%)", n, Percentage)), position = position_stack(vjust = 0.5), size = 4) +
       labs(title = title, fill = NULL) +
-      theme(plot.title = element_text(hjust = 0.5), panel.grid = element_blank(), axis.title = element_blank(), axis.text = element_blank(),
-        axis.ticks = element_blank())
+      theme(plot.title = element_text(hjust = 0.5), panel.grid = element_blank(), axis.title = element_blank(), 
+            axis.text = element_blank(), axis.ticks = element_blank())
     } else {
     # Barplot
     p <- ggplot(counts, aes(x = Category, y = n)) + geom_col(fill = "#4472C4", width = 0.7) +
@@ -97,9 +99,11 @@ summarise_data <- function(results, var_name, is_micro=FALSE) {
     } else if (var_name == "Compliance") {
       results <- results %>% mutate(Compliance = Diagnosis == Model_pred)
     } else if (var_name == "Overreliance") {
-      results <- results %>% mutate(Overreliance = if_else(Model_correct == 0, as.numeric(Diagnosis == Model_pred), NA_real_))
+      results <- results %>% mutate(Overreliance = if_else(Model_correct == 0, as.numeric(Diagnosis == Model_pred), 
+                                                           NA_real_))
     } else if (var_name == "Underreliance") {
-      results <- results %>% mutate(Underreliance = if_else(Model_correct == 1, as.numeric(Diagnosis != Model_pred), NA_real_))
+      results <- results %>% mutate(Underreliance = if_else(Model_correct == 1, as.numeric(Diagnosis != Model_pred), 
+                                                            NA_real_))
     }
   } else {
     if (var_name == "Accuracy") {
@@ -107,12 +111,14 @@ summarise_data <- function(results, var_name, is_micro=FALSE) {
     } else if (var_name == "Compliance") {
       results <- results %>% mutate(Compliance = 1 - abs(Score - Model_score) / 100)
     } else if (var_name == "Overreliance") {
-      results <- results %>% mutate(Overreliance = if_else(Model_correct == 0, 1 - abs(Score - Model_score) / 100, NA_real_))
+      results <- results %>% mutate(Overreliance = if_else(Model_correct == 0, 1 - abs(Score - Model_score) / 100, 
+                                                           NA_real_))
     } else if (var_name == "Underreliance") {
       results <- results %>% mutate(Underreliance = if_else(Model_correct == 1, abs(Score - Model_score) / 100, NA_real_))
     }
   }
-  summary <- results %>% group_by(Annotator, Group) %>% summarise(!!var_name := mean(.data[[var_name]], na.rm = TRUE), .groups = "drop")
+  summary <- results %>% group_by(Annotator, Group) %>% summarise(!!var_name := mean(.data[[var_name]], na.rm = TRUE), 
+                                                                  .groups = "drop")
   return(summary)
 }
 
@@ -136,7 +142,7 @@ stat_compare_preliminary <- function(x1, x2, results_pooled, var_name, alpha = 0
     }
   } else {
     #  Check normality with paired Shapiro–Wilk test
-    norm1 <- ifelse(length(unique(x1)) >= 3 | length(unique(x2)) >= 3, FALSE, shapiro.test(x2 - x1)$p.value > alpha)
+    norm1 <- ifelse(length(unique(x1)) >= 3 | length(unique(x2)) >= 3, shapiro.test(x2 - x1)$p.value > alpha, FALSE)
     norm2 <- norm1
     same_var <- FALSE
   }
@@ -145,7 +151,7 @@ stat_compare_preliminary <- function(x1, x2, results_pooled, var_name, alpha = 0
 
 # Compare statistics
 stat_compare <- function(results, var_name, groups, h1 = "greater", alpha = 0.05, is_ordinal = FALSE, is_paired = FALSE, 
-                         random_mu = 2, results2=NULL) {
+                         random_mu = 2, results2 = NULL) {
   
   # Prepare data
   if (is.null(results2)) {
@@ -211,7 +217,7 @@ stat_compare <- function(results, var_name, groups, h1 = "greater", alpha = 0.05
   second_term <- ifelse(length(groups) == 2, paste0(groups[2], "'s ", var_name), "random case")
   cat(paste0(groups[1], "'s ", var_name, " (", mean1, ") is ", addon, second_term, " (", mean2, ")  -  with p-value = ", 
              format(p_value, scientific = TRUE, digits = 2), ", n1 = ", length(x1), ", and n2 = ", length(x2), "\n"))
-  return(list(res1 = results1, res2 = results2))
+  return(list(res1 = results1, res2 = results2, p_value = p_value))
 }
 
 # Draw compare plots
@@ -239,7 +245,8 @@ plot_compare <- function(results_pooled, var_name, levels = NULL, width = 8, tit
   if (do_barplot) {
     barplot <- ggplot(results_pooled, aes(x = Group, y = .data[[var_name]], fill = Group)) +
       geom_bar(stat = "summary", fun = "mean", position = "dodge") +
-      labs(title = paste(toupper(var_name), "COMPARISON BARPLOT"), x = "Group", y = var_name) + coord_cartesian(ylim = ylims)
+      labs(title = paste(toupper(var_name), "COMPARISON BARPLOT"), x = "Group", y = var_name) + 
+      coord_cartesian(ylim = ylims)
     
     if (!is.null(mu))
       barplot <- barplot + geom_hline(yintercept = mu, linetype = "dashed", color = "purple")
@@ -249,8 +256,8 @@ plot_compare <- function(results_pooled, var_name, levels = NULL, width = 8, tit
       barplot <- barplot + theme(axis.text.x = element_text(angle = 20, hjust = 1)) + 
         geom_vline(xintercept = boundaries, linetype = "dashed", color = "black", alpha = 0.5)
     }
-    ggsave(paste0(results_dir, "barplot_", tolower(var_name), title_addon,  ".png"), plot = barplot, dpi = 300, width = width, 
-           height = 4)
+    ggsave(paste0(results_dir, "barplot_", tolower(var_name), title_addon,  ".png"), plot = barplot, dpi = 300, 
+           width = width, height = 4)
   }
   
   # Box-plot comparison
@@ -265,7 +272,8 @@ plot_compare <- function(results_pooled, var_name, levels = NULL, width = 8, tit
     boxplot <- boxplot + theme(axis.text.x = element_text(angle = 20, hjust = 1)) + 
       geom_vline(xintercept = boundaries, linetype = "dashed", color = "black", alpha = 0.5)
   }
-  ggsave(paste0(results_dir, "boxplot_", tolower(var_name), title_addon, ".png"), plot = boxplot, dpi = 300, width = width, height = 4)
+  ggsave(paste0(results_dir, "boxplot_", tolower(var_name), title_addon, ".png"), plot = boxplot, dpi = 300, width = width, 
+         height = 4)
   
   # Violin-plot comparison
   if (do_violin) {
@@ -279,7 +287,8 @@ plot_compare <- function(results_pooled, var_name, levels = NULL, width = 8, tit
       labs(title = paste(toupper(var_name), "COMPARISON"), x = "Group", y = var_name) +
       coord_cartesian(ylim = ylims) +
       scale_y_continuous(breaks = y_breaks, minor_breaks = y_minor_breaks) +
-      theme(legend.position = "none", plot.title = element_text(hjust = 0.5, face = "bold", size = 14), axis.text.x = element_text(angle = 15, hjust = 1),
+      theme(legend.position = "none", plot.title = element_text(hjust = 0.5, face = "bold", size = 14), 
+            axis.text.x = element_text(angle = 15, hjust = 1),
         panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(color = "gray80", linewidth = 0.5),
         panel.grid.minor.y = element_line(color = "gray90", linewidth = 0.3), panel.grid.minor.x = element_blank())
     
@@ -309,6 +318,419 @@ filter_outliers <- function(results, var_name, multiplier = 3) {
   return(filtered_results)
 }
 
+# Benjamini–Hochberg correction of p-values
+adjust_pvalues <- function(stats, comparisons, method = "BH") {
+  p_values <- sapply(stats, function(x) x$p_value)
+  return(tibble(Comparison = comparisons, PValue = p_values, PAdjusted = p.adjust(p_values, method = method)))
+}
+
+# One comparison of two subgroups
+one_subgroup_stats_compare <- function(results, var_name, groups, filter1, filter2, alpha = 0.05,
+                                       is_ordinal = FALSE, is_paired = FALSE, is_micro = FALSE, h1 = "two.sided") {
+  res1 <- summarise_data(results %>% filter(!!filter1), var_name, is_micro = is_micro) %>%
+    filter(is.finite(.data[[var_name]]))
+  res2 <- summarise_data(results %>% filter(!!filter2), var_name, is_micro = is_micro) %>%
+    filter(is.finite(.data[[var_name]]))
+  
+  # Match participants for paired comparisons
+  if (is_paired) {
+    matched <- inner_join(res1 %>% select(Annotator, Control = all_of(var_name)),
+                          res2 %>% select(Annotator, Tested = all_of(var_name)), by = "Annotator",
+                          relationship = "one-to-one")
+    res1 <- matched %>% transmute(Annotator, Group = groups[1], !!var_name := Control)
+    res2 <- matched %>% transmute(Annotator, Group = groups[2], !!var_name := Tested)
+  } else {
+    res1$Group <- groups[1]
+    res2$Group <- groups[2]
+  }
+  
+  if (nrow(res1) < 3 || nrow(res2) < 3) stop("Insufficient participants for statistical comparison.")
+  if (is_paired && all(res1[[var_name]] == res2[[var_name]]))
+    return(list(res1 = res1, res2 = res2, p_value = 1))
+  
+  stats <- stat_compare(rbind(res1, res2), var_name, groups = groups, alpha = alpha, is_ordinal = is_ordinal,
+                        is_paired = is_paired, h1 = h1)
+  return(stats)
+}
+
+# Subgroup comparisons
+subgroup_stats_compare <- function(results, group, var_name = "Accuracy", alpha = 0.05, is_ordinal = FALSE,
+                                   is_paired = TRUE, title_addon = "", do_violin = FALSE, is_micro = FALSE,
+                                   duration_results = survey_results) {
+  # Select macro-group and compute participant-level duration
+  duration_summary <- duration_results %>% group_by(Annotator) %>%
+    summarise(Mean_duration = mean(Duration, na.rm = TRUE), .groups = "drop")
+  speed_cutoff <- median(duration_summary$Mean_duration, na.rm = TRUE)
+  if (!is.finite(speed_cutoff)) stop("Cannot compute evaluator speed.")
+  
+  results <- results %>% select(-any_of("Mean_duration")) %>%
+    left_join(duration_summary, by = "Annotator", relationship = "many-to-one") %>% filter(Group == group)
+  
+  # Define common subgroup comparisons
+  filters <- rlang::quos("Non-experts" = Expertise == "Non-expert", "Experts" = Expertise == "Expert",
+                         "Familiar residents" = Familiarity == TRUE, "Unfamiliar residents" = Familiarity == FALSE,
+                         "Fast evaluators" = Mean_duration <= speed_cutoff, "Slow evaluators" = Mean_duration > speed_cutoff)
+  
+  # Add case-related subgroup comparisons for non-questionnaire variables
+  if (!(var_name %in% c("Competence", "Autonomy", "Relatedness", "Enjoyment", "Demand"))) {
+    filters <- c(rlang::quos("Simple cases" = Gt_complexity == 0, "Complex cases" = Gt_complexity == 1,
+                             "Cases deemed simple" = Complexity <= 2.5, "Cases deemed complex" = Complexity > 2.5,
+                             "Support deemed unuseful" = Usefulness <= 2.5, "Support deemed useful" = Usefulness > 2.5),
+                 filters,
+                 rlang::quos("AI wrong" = Model_correct == 0, "AI right" = Model_correct == 1))
+  }
+  
+  # Run subgroup comparisons
+  res_list <- list()
+  output_list <- list()
+  output_list_names <- c()
+  level_list <- c()
+  group_sizes <- c()
+  
+  for (i in seq(1, length(filters), by = 2)) {
+    name1 <- names(filters)[i]
+    name2 <- names(filters)[i + 1]
+    subgroup_is_paired <- is_paired && !(name1 %in% c("Non-experts", "Familiar residents", "Fast evaluators"))
+    
+    cat(paste0("\nStratify by ", name1, " vs. ", name2, ":\n"))
+    
+    stats <- tryCatch(
+      one_subgroup_stats_compare(results, var_name, c(name1, name2), filters[[i]], filters[[i + 1]],
+                                 alpha = alpha, is_ordinal = is_ordinal, is_paired = subgroup_is_paired,
+                                 is_micro = is_micro, h1 = "two.sided"),
+      error = function(e) {
+        cat("Comparison skipped:", conditionMessage(e), "\n")
+        NULL
+      }
+    )
+    
+    if (!is.null(stats) && is.finite(stats$p_value)) {
+      res_list <- c(res_list, list(stats$res1, stats$res2))
+      output_list <- c(output_list, list(stats))
+      output_list_names <- c(output_list_names, paste0(name1, " vs. ", name2))
+      level_list <- c(level_list, name1, name2)
+      group_sizes <- c(group_sizes, 2)
+    }
+  }
+  
+  # Display results
+  if (length(res_list) > 0) {
+    plot_compare(res_list, var_name, levels = level_list, width = 10, group_sizes = group_sizes,
+                 title_addon = paste0("_", gsub("[^[:alnum:]]+", "_", tolower(group)), "_stratified", title_addon,
+                                      ifelse(is_micro, "_micro", "")), do_violin = do_violin)
+    
+    pvalues <- adjust_pvalues(output_list, output_list_names)
+    cat("\nBH-ADJUSTED p-values:\n")
+    print(pvalues)
+  } else {
+    cat("No subgroup comparisons could be estimated.\n")
+  }
+  
+  return(invisible(if (length(output_list) > 0) pvalues else NULL))
+}
+
+# Single-variable analysis
+analyse_variable <- function(results, var_name, random_mu = NULL, filter_outliers = FALSE, is_micro = FALSE) {
+  if (filter_outliers) {
+    results <- filter_outliers(results, var_name)
+  }
+  data_summary <- summarise_data(results, var_name, is_micro = is_micro)
+  
+  cat("\n=====================================================================================================================\n")
+  string_addon <- ifelse(is_micro, " MICRO", "")
+  cat(paste0("\n", toupper(var_name), string_addon, " EVALUATION...\n"))
+  
+  # Group comparison
+  stats_a <- stat_compare(data_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
+  stats_b <- stat_compare(data_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
+  stats_c <- stat_compare(data_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
+  stats_list <- list(stats_a, stats_b, stats_c)
+  comparison_names <- c(paste0(groups[1], " vs. ", groups[2]), paste0(groups[1], " vs. ", groups[3]), 
+                       paste0(groups[2], " vs. ", groups[3]))
+  title_addon <- ifelse(is_micro, "_micro", "")
+  plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = random_mu, do_violin = TRUE, 
+               title_addon = title_addon)
+  
+  # Randomness check
+  if (!is.null(random_mu)) {
+    stats_d <- stat_compare(data_summary, var_name, groups = groups[1], h1 = "two.sided", random_mu = random_mu)
+    stats_e <- stat_compare(data_summary, var_name, groups = groups[2], h1 = "two.sided", random_mu = random_mu)
+    stats_f <- stat_compare(data_summary, var_name, groups = groups[3], h1 = "two.sided", random_mu = random_mu)
+    stats_list <- c(stats_list, list(stats_d, stats_e, stats_f))
+    comparison_names <- c(comparison_names, paste0(groups[1:3], " vs. random"))
+  }
+  
+  # p-values correction
+  pvalues <- adjust_pvalues(stats_list, comparison_names)
+  cat("\nBH-ADJUSTED p-values:\n")
+  print(pvalues)
+  
+  # Sub-grouop comparison
+  for (group in groups[1:3]) {
+    cat(paste0("\n\nSUBGROUP STATS COMPARE FOR ", toupper(group), ":"))
+    subgroup_stats_compare(results, group, var_name = var_name, is_paired = FALSE, do_violin = TRUE)
+  }
+}
+
+# Compute Hedges' g with small-sample correction
+hedges_delta <- function(x_tested, x_control, is_paired = FALSE) {
+  if (is_paired) {
+    if (length(x_tested) != length(x_control)) stop("Paired groups must have equal sample sizes.")
+    differences <- x_tested - x_control
+    df <- length(differences) - 1
+    numerator <- mean(differences)
+    denominator <- sd(differences)
+  } else {
+    n1 <- length(x_tested)
+    n2 <- length(x_control)
+    df <- n1 + n2 - 2
+    numerator <- mean(x_tested) - mean(x_control)
+    denominator <- sqrt(((n1 - 1) * var(x_tested) + (n2 - 1) * var(x_control)) / df)
+  }
+  if (df <= 1 || !is.finite(denominator) || denominator == 0) return(NA_real_)
+  correction <- exp(lgamma(df / 2) - lgamma((df - 1) / 2) - 0.5 * log(df / 2))
+  return(correction * numerator / denominator)
+}
+
+# Compute effect size from participant-level summaries
+compute_delta <- function(results_control, results_tested, var_name = "Accuracy", is_paired = FALSE, is_micro = FALSE) {
+  control_summary <- summarise_data(results_control, var_name, is_micro = is_micro)
+  tested_summary <- summarise_data(results_tested, var_name, is_micro = is_micro)
+  
+  if (is_paired) {
+    paired_data <- inner_join(control_summary %>% select(Annotator, Control = all_of(var_name)),
+                              tested_summary %>% select(Annotator, Tested = all_of(var_name)), by = "Annotator") %>%
+      filter(is.finite(Control), is.finite(Tested))
+    x_control <- paired_data$Control
+    x_tested <- paired_data$Tested
+  } else {
+    x_control <- as.numeric(control_summary[[var_name]])
+    x_tested <- as.numeric(tested_summary[[var_name]])
+    x_control <- x_control[is.finite(x_control)]
+    x_tested <- x_tested[is.finite(x_tested)]
+  }
+  return(hedges_delta(x_tested, x_control, is_paired = is_paired))
+}
+
+# Bootstrap BCa confidence interval for effect size
+assess_delta <- function(results, groups, var_name = "Accuracy", title = "global", n_iter = 1000,
+                         alpha = 0.05, margin_error = 0.2, seed = 111099, is_paired = FALSE, is_micro = TRUE,
+                         show_bca_plots = FALSE) {
+  # Original statistic
+  cat(paste0("\nAssessing effect-size for ", toupper(gsub("_", " ", title)), " (", var_name, "):\n"))
+  if (length(groups) != 2 || groups[1] == groups[2]) stop("Specify two different group labels.")
+  results_control <- results[results$Group == groups[1], , drop = FALSE]
+  results_tested <- results[results$Group == groups[2], , drop = FALSE]
+  if (nrow(results_control) == 0 || nrow(results_tested) == 0) stop("One or both groups are empty.")
+  
+  # Prepare participant-level data
+  control_summary <- summarise_data(results_control, var_name, is_micro = is_micro) %>%
+    transmute(Annotator, Value = .data[[var_name]]) %>% filter(is.finite(Value))
+  tested_summary <- summarise_data(results_tested, var_name, is_micro = is_micro) %>%
+    transmute(Annotator, Value = .data[[var_name]]) %>% filter(is.finite(Value))
+  
+  if (is_paired) {
+    boot_data <- inner_join(control_summary %>% rename(Control = Value),
+                            tested_summary %>% rename(Tested = Value), by = "Annotator")
+    if (nrow(boot_data) < 4) stop("Insufficient matched participants for paired bootstrap.")
+  } else {
+    boot_data <- data.frame(Value = c(control_summary$Value, tested_summary$Value),
+                            Condition = c(rep("Control", nrow(control_summary)), rep("Tested", nrow(tested_summary))))
+    if (nrow(control_summary) < 4 || nrow(tested_summary) < 4) stop("Insufficient participants for bootstrap.")
+  }
+  
+  # Bootstrap statistic
+  statistic <- function(data, idx) {
+    sample_data <- data[idx, , drop = FALSE]
+    if (is_paired) {
+      x_control <- sample_data$Control
+      x_tested <- sample_data$Tested
+    } else {
+      x_control <- sample_data$Value[sample_data$Condition == "Control"]
+      x_tested <- sample_data$Value[sample_data$Condition == "Tested"]
+    }
+    return(hedges_delta(x_tested, x_control, is_paired = is_paired))
+  }
+  
+  # Bootstrap resampling
+  set.seed(seed)
+  if (is_paired) {
+    boot_results <- boot::boot(boot_data, statistic = statistic, R = n_iter)
+  } else {
+    boot_results <- boot::boot(boot_data, statistic = statistic, R = n_iter, strata = factor(boot_data$Condition))
+  }
+  initial_delta <- as.numeric(boot_results$t0)
+  boot_deltas <- as.numeric(boot_results$t)
+  valid <- is.finite(boot_deltas)
+  n_invalid <- sum(!valid)
+  
+  if (!is.finite(boot_results$t0)) stop("Original effect size is undefined.")
+  if (sum(valid) < 100) stop("Too few valid bootstrap replicates to estimate the confidence interval.")
+  cat("Valid bootstrap replicates:", sum(valid), "/", n_iter, "\n")
+  if (n_invalid > 0) warning("Some bootstrap replicates have undefined effect sizes.")
+  
+  # BCa confidence interval
+  bca <- tryCatch(suppressWarnings(boot::boot.ci(boot_results, conf = 1 - alpha, type = "bca")$bca),
+                  error = function(e) NULL)
+  ci_method <- "BCa"
+  
+  if (is.null(bca) || any(!is.finite(bca[4:5]))) {
+    ci_method <- "Percentile"
+    ci <- quantile(boot_deltas[valid], probs = c(alpha / 2, 1 - alpha / 2), na.rm = TRUE, names = FALSE)
+    lower_bca <- as.numeric(ci[1])
+    upper_bca <- as.numeric(ci[2])
+    warning("BCa unavailable: using percentile CI. If bootstrap replicates were invalid, interpret this interval cautiously.")
+  } else {
+    lower_bca <- as.numeric(bca[4])
+    upper_bca <- as.numeric(bca[5])
+  }
+  
+  # Plot
+  if (show_bca_plots) {
+    plot_data <- data.frame(boot_deltas = boot_deltas[valid])
+    p <- ggplot(plot_data, aes(x = boot_deltas)) + geom_histogram(bins = 50, fill = "skyblue", alpha = 0.7) +
+      geom_vline(xintercept = initial_delta, color = "red", linetype = "dashed") +
+      geom_vline(xintercept = c(lower_bca, upper_bca), color = "green", linetype = "dashed") +
+      geom_vline(xintercept = c(-margin_error, margin_error), color = "black") +
+      labs(title = paste0("Effect-size assessment for ", toupper(gsub("_", " ", title))),
+           x = "Effect Size (Hedges' g)", y = "Frequency")
+    
+    title_addon <- paste0(title, ifelse(is_micro, "_micro", ""))
+    ggsave(filename = paste0(results_dir, title_addon, "_", tolower(var_name), "_delta.png"), plot = p, dpi = 300,
+           width = 5, height = 4)
+  }
+  
+  # Non-inferiority and equivalence assessment
+  if (n_invalid == 0) {
+    if (lower_bca > -margin_error) cat("The data suggest non-inferiority.\n")
+    else cat("The data do NOT conclusively suggest non-inferiority.\n")
+    
+    if (upper_bca < margin_error) cat("The data suggest non-superiority.\n")
+    else cat("The data do NOT conclusively suggest non-superiority.\n")
+    
+    if (lower_bca > -margin_error && upper_bca < margin_error) cat("The data suggest equivalence.\n")
+  } else {
+    cat("Non-inferiority/equivalence assessment withheld because some bootstrap effect sizes were undefined.\n")
+  }
+  
+  # Output
+  cat("Initial effect-size:", round(initial_delta, 3), "\n")
+  cat(ci_method, (1 - alpha) * 100, "% CI:", paste0("(", round(lower_bca, 3), ", ", round(upper_bca, 3), ")"), "\n")
+  return(data.frame(delta = initial_delta, lower = lower_bca, upper = upper_bca,
+                    ci_method = ci_method, invalid_boot = n_invalid))
+}
+
+# Draw Forest plot to compare effect sizes
+draw_forest_plot <- function(input_values, input_names, margin_error = 0.2, addon = "", width = 8, height = 4,
+                             group_sizes = NULL) {
+  df <- do.call(rbind, input_values)
+  if (nrow(df) != length(input_names)) stop("Number of input values and names must match.")
+  if (anyDuplicated(input_names)) stop("Forest plot labels must be unique.")
+  df$Group <- factor(input_names, levels = rev(input_names))
+  
+  p <- ggplot(df, aes(x = delta, y = Group)) +
+    annotate("rect", xmin = -margin_error, xmax = margin_error, ymin = -Inf, ymax = Inf, fill = "darkgray", alpha = 0.5) +
+    geom_vline(xintercept = 0, color = "black", linewidth = 1.0, alpha = 0.7) +
+    geom_vline(xintercept = c(-margin_error, margin_error), linetype = "dashed", color = "gray25", linewidth = 1.0, alpha = 0.7) +
+    geom_point(aes(color = Group), size = 3, na.rm = TRUE) +
+    geom_errorbar(aes(xmin = lower, xmax = upper, color = Group), orientation = "y", width = 0.2, linewidth = 1.2, na.rm = TRUE) +
+    labs(x = "Effect Size (with bootstrap CI)", y = "") +
+    theme(legend.position = "none")
+  
+  # Indicate unavailable estimates
+  if (any(!is.finite(df$delta))) {
+    p <- p + geom_text(data = df[!is.finite(df$delta), ], aes(x = -0.95, y = Group, label = "Not estimable"),
+                       inherit.aes = FALSE, hjust = 0, color = "gray30", size = 3)
+  }
+  
+  # Separate subgroup categories
+  if (!is.null(group_sizes)) {
+    boundaries <- head(cumsum(group_sizes), -1) + 0.5
+    p <- p + geom_hline(yintercept = boundaries, linetype = "dashed", color = "gray55", linewidth = 0.8) +
+      theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank())
+  }
+  
+  # Set grid
+  p <- p + scale_x_continuous(breaks = seq(-1, 1, by = 0.2)) + coord_cartesian(xlim = c(-1, 1)) +
+    theme(panel.grid.major.x = element_line(color = "white"), panel.grid.minor.x = element_blank())
+  
+  addon <- ifelse(addon == "", addon, paste0(addon, "_"))
+  ggsave(filename = paste0(results_dir, addon, "delta_forest.png"), plot = p, dpi = 300, width = width, height = height)
+}
+
+# Subgroup bootstrap CI assessment for effect size given a filtering expression
+one_subgroup_delta <- function(results, groups, var_name, filter_expr, title, n_iter = 1000, alpha = 0.05,
+                               margin_error = 0.2, seed = 111099, is_paired = TRUE, is_micro = FALSE) {
+  filtered_results <- results %>% filter(!!filter_expr)
+  stats <- tryCatch(
+    assess_delta(filtered_results, groups = groups, var_name = var_name, title = title, n_iter = n_iter,
+                 alpha = alpha, margin_error = margin_error, seed = seed, is_paired = is_paired, is_micro = is_micro),
+    error = function(e) {
+      cat(paste0("Subgroup ", title, " could not be estimated: ", conditionMessage(e), "\n"))
+      data.frame(delta = NA_real_, lower = NA_real_, upper = NA_real_, ci_method = "Unavailable", invalid_boot = NA_integer_)
+    }
+  )
+  return(stats)
+}
+
+# Define subgroup comparisons
+get_subgroup_filters <- function(var_name, speed_cutoff) {
+  filters <- rlang::quos("Non-experts" = Expertise == "Non-expert", "Experts" = Expertise == "Expert",
+                         "Familiar residents" = Familiarity == TRUE, "Unfamiliar residents" = Familiarity == FALSE,
+                         "Fast evaluators" = Mean_duration <= speed_cutoff, "Slow evaluators" = Mean_duration > speed_cutoff)
+  
+  if (!(var_name %in% c("Competence", "Autonomy", "Relatedness", "Enjoyment", "Demand"))) {
+    filters <- c(rlang::quos("Simple cases" = Gt_complexity == 0, "Complex cases" = Gt_complexity == 1,
+                             "Cases deemed simple" = Complexity <= 2.5, "Cases deemed complex" = Complexity > 2.5,
+                             "Support deemed unuseful" = Usefulness <= 2.5, "Support deemed useful" = Usefulness > 2.5),
+                 filters,
+                 rlang::quos("AI wrong" = Model_correct == 0, "AI right" = Model_correct == 1))
+  }
+  return(filters)
+}
+
+# Subgroup bootstrap CI assessment for effect size
+subgroup_delta <- function(results, groups, var_name = "Accuracy", n_iter = 1000, alpha = 0.05, margin_error = 0.2,
+                           seed = 111099, title = "global", is_paired = TRUE, is_micro = FALSE, width = 10, height = 8) {
+  # Define subgroup comparisons
+  speed_cutoff <- median(results$Mean_duration, na.rm = TRUE)
+  filters <- get_subgroup_filters(var_name, speed_cutoff)
+  
+  # Run subgroup comparisons
+  stats <- vector("list", length(filters))
+  names(stats) <- names(filters)
+  for (i in seq_along(filters)) {
+    subgroup_title <- paste0(title, "_", tolower(gsub("[^[:alnum:]]+", "_", names(filters)[i])))
+    stats[[i]] <- one_subgroup_delta(results, groups = groups, var_name = var_name, filter_expr = filters[[i]],
+                                     title = subgroup_title, n_iter = n_iter, alpha = alpha, margin_error = margin_error,
+                                     seed = seed + i, is_paired = is_paired, is_micro = is_micro)
+  }
+  # Display results
+  addon <- paste0("subgroup_compare_", tolower(var_name), ifelse(is_micro, "_micro", ""), "_", title)
+  forest <- draw_forest_plot(stats, names(filters), margin_error = margin_error, addon = addon, width = width, height = height,
+                             group_sizes = rep(2, length(filters) / 2))
+  return(invisible(stats))
+}
+
+# Single-variable effect size analysis
+analyse_delta <- function(results, var_name, is_micro = FALSE, subgroup_width = 8, subgroup_height = 8) {
+  # Group comparison
+  addon <- ifelse(is_micro, "_micro", "")
+  stats_a <- assess_delta(results, groups = c(groups[1], groups[2]), var_name = var_name, title = "lowlevel", is_paired = TRUE,
+                          is_micro = is_micro)
+  stats_b <- assess_delta(results, groups = c(groups[1], groups[3]), var_name = var_name, title = "highlevel", is_paired = TRUE,
+                          is_micro = is_micro)
+  draw_forest_plot(list(stats_a, stats_b), c(groups[2], groups[3]), addon = paste0("scenario_compare_", tolower(var_name), addon), 
+                   width = 10, height = 3)
+  
+  # Sub-group comparison
+  subgroup_delta(results, groups = c(groups[1], groups[2]), title = "lowlevel", var_name = var_name, width = subgroup_width, 
+                 height = subgroup_height, is_micro = is_micro, is_paired = TRUE)
+  subgroup_delta(results, groups = c(groups[1], groups[3]), title = "highlevel", var_name = var_name, width = subgroup_width, 
+                 height = subgroup_height, is_micro = is_micro, is_paired = TRUE)
+}
+
+
 ############################################################################################################################
 # READ DATA 
 ############################################################################################################################
@@ -326,7 +748,8 @@ if (BIND_USER_RESULTS) {
       final_i <- read.csv(paste0(folder, "/final_questionnaire.csv"))
       if (nrow(final_i) == 3) {
         final_questionnaire[[length(final_questionnaire) + 1]] <- final_i
-        preliminary_questionnaire[[length(preliminary_questionnaire) + 1]] <- read.csv(paste0(folder, "/preliminary_questionnaire.csv"))
+        preliminary_questionnaire[[length(preliminary_questionnaire) + 1]] <- read.csv(paste0(folder, 
+                                                                                              "/preliminary_questionnaire.csv"))
         survey_results[[length(survey_results) + 1]] <- read.csv(paste0(folder, "/survey_results.csv"))
       }
       rm(final_i)
@@ -362,7 +785,8 @@ if (BIND_USER_RESULTS) {
 annotator_levels <- preliminary_questionnaire$annotator
 preliminary_questionnaire$annotator <- factor(preliminary_questionnaire$annotator, levels = annotator_levels)
 preliminary_questionnaire$sex <- factor(preliminary_questionnaire$sex, levels = sex_levels, labels = sex_levels_en)
-preliminary_questionnaire$career <- factor(preliminary_questionnaire$career, levels = career_levels, labels = career_levels_en)
+preliminary_questionnaire$career <- factor(preliminary_questionnaire$career, levels = career_levels, 
+                                           labels = career_levels_en)
 preliminary_questionnaire$expertise <- ifelse(preliminary_questionnaire$expertise >= 500, "Expert", "Non-expert")
 preliminary_questionnaire$expertise <- factor(preliminary_questionnaire$expertise, levels = c("Non-expert", "Expert"))
 
@@ -374,6 +798,8 @@ survey_results$group <- ifelse(survey_results$visual_group == visual_groups_en[1
 
 final_questionnaire$annotator <- factor(final_questionnaire$annotator, levels = annotator_levels)
 final_questionnaire$visual_group <- factor(final_questionnaire$group, levels = visual_groups, labels = visual_groups_en)
+group_mapping <- survey_results %>% distinct(annotator, visual_group, group)
+final_questionnaire <- final_questionnaire %>% select(-group) %>% left_join(group_mapping, by = c("annotator", "visual_group"))
 
 # Compute auxiliary variables
 preliminary_questionnaire$familiarity <- preliminary_questionnaire$knowledge == 1 | preliminary_questionnaire$worked == 1
@@ -386,7 +812,8 @@ final_questionnaire$relatedness <- rowMeans(final_questionnaire[, c("relatedness
 colnames(final_questionnaire)[colnames(final_questionnaire) %in% c("enjoyment1", "demand1")] <- c("enjoyment", "demand")
 
 # Complement survey data frame with additional information
-survey_results <- survey_results %>% left_join(preliminary_questionnaire %>% select(annotator, expertise, familiarity, trust), by = "annotator")
+survey_results <- survey_results %>% left_join(preliminary_questionnaire %>% select(annotator, expertise, 
+                                                                                    familiarity, trust), by = "annotator")
 survey_results$gt_class <- gt_class[match(as.character(survey_results$instance), data_names)]
 survey_results$gt_complexity <- gt_complexity[match(as.character(survey_results$instance), data_names)]
 
@@ -400,8 +827,11 @@ block_order <- final_questionnaire %>% mutate(visual_group = as.character(visual
   group_by(annotator) %>% mutate(block = row_number() - 1, block_start = lag(time)) %>% ungroup() %>%
   left_join(preliminary_questionnaire %>% select(annotator, time_pre = time), by = "annotator") %>%
   mutate(block_start = if_else(block == 0, time_pre, block_start)) %>% select(annotator, visual_group, block, block_start)
-survey_results <- survey_results %>% mutate(visual_group = as.character(visual_group)) %>%
-  select(-any_of(c("block", "block_start", "LagTime", "Duration"))) %>% left_join(block_order, by = c("annotator", "visual_group"))
+suppressWarnings(
+  survey_results <- survey_results %>% mutate(visual_group = as.character(visual_group)) %>%
+    select(-any_of(c("block", "block_start", "LagTime", "Duration"))) %>% left_join(block_order, by = c("annotator",
+                                                                                                        "visual_group"))
+  )
 survey_results <- survey_results %>% group_by(annotator, block) %>% arrange(time, .by_group = TRUE) %>%
   mutate(LagTime = lag(time), LagTime = if_else(row_number() == 1, block_start, LagTime)) %>% ungroup() %>%
   mutate(Duration = as.numeric(difftime(time, LagTime, units = "mins"))) %>% select(-LagTime, -block_start)
@@ -419,8 +849,10 @@ if (CREATE_SCORE_FILE) {
 } else {
   score_results <- read_excel(paste0(results_dir, "score_results.xlsx"))
   score_results$Annotator[score_results$Annotator == "Ellena"] <- "Ellena "
-  survey_results <- survey_results %>% left_join(score_results %>% select(Annotator, Instance, Score), by = c("Annotator", "Instance"))
+  survey_results <- survey_results %>% left_join(score_results %>% select(Annotator, Instance, Score), by = c("Annotator", 
+                                                                                                              "Instance"))
 }
+
 
 ############################################################################################################################
 # PRELIMINARY ANALYSIS
@@ -442,10 +874,11 @@ p_skeptic <- plot_population(population, "Skepticism", "Skepticism towards AI")
 # Age distribution
 p_age <- ggplot(preliminary_questionnaire, aes(x = Age)) +
   geom_histogram(binwidth = 2, boundary = 0, fill = "#4472C4", color = "white") +
-  geom_vline(xintercept = median(preliminary_questionnaire$Age, na.rm = TRUE), linetype = "dashed", color = "red", linewidth = 0.8) +
-  scale_x_continuous(breaks = scales::breaks_width(2)) +
+  geom_vline(xintercept = median(preliminary_questionnaire$Age, na.rm = TRUE), linetype = "dashed", color = "red", 
+             linewidth = 0.8) + scale_x_continuous(breaks = scales::breaks_width(2)) +
   labs(title = "Age Distribution", x = "Age (years)", y = "Number of participants")
 ggsave(paste0(results_dir, "population_age.png"), plot = p_age, dpi = 300, width = 7, height = 5)
+
 
 ############################################################################################################################
 # STATISTICAL ANALYSES FOR MACRO ACCURACY
@@ -462,104 +895,17 @@ p_diagnosis <- ggplot(diagnosis_distribution, aes(x = Group, y = Proportion, fil
 ggsave(filename = paste0(results_dir, "diagnosis_distribution_by_group.png"), plot = p_diagnosis, dpi = 300, width = 8, 
        height = 5)
 
-# Compare accuracy
-var_name = "Accuracy"
-accuracy_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(accuracy_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(accuracy_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(accuracy_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, do_violin = TRUE)
+# Compare variables
+analyse_variable(survey_results, var_name = "Accuracy")
+analyse_variable(survey_results, var_name = "Compliance")
+analyse_variable(survey_results, var_name = "Overreliance")
+analyse_variable(survey_results, var_name = "Underreliance")
+analyse_variable(survey_results, var_name = "Confidence", random_mu = 2.5)
+analyse_variable(survey_results, var_name = "Usefulness", random_mu = 2.5)
+print(ok)
+analyse_variable(survey_results, var_name = "Complexity", random_mu = 2.5)
+analyse_variable(survey_results, var_name = "Duration", filter_outliers = TRUE)
 
-# Compare compliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Compliance"
-compliance_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(compliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(compliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(compliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, do_violin = TRUE)
-
-# Compare over-reliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Overreliance"
-overreliance_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(overreliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(overreliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(overreliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, do_violin = TRUE)
-
-# Compare under-reliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Underreliance"
-underreliance_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(underreliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(underreliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(underreliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, do_violin = TRUE)
-
-# Compare confidence
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Confidence"
-confidence_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(confidence_summary, var_name, groups = groups[1], h1 = "two.sided", random_mu = 2.5)
-stats_a <- stat_compare(confidence_summary, var_name, groups = groups[1], h1 = "greater", random_mu = 2.5)
-stats_b <- stat_compare(confidence_summary, var_name, groups = groups[2], h1 = "two.sided", random_mu = 2.5)
-stats_b <- stat_compare(confidence_summary, var_name, groups = groups[2], h1 = "greater", random_mu = 2.5)
-stats_c <- stat_compare(confidence_summary, var_name, groups = groups[3], h1 = "two.sided", random_mu = 2.5)
-stats_c <- stat_compare(confidence_summary, var_name, groups = groups[3], h1 = "greater", random_mu = 2.5)
-stats_a <- stat_compare(confidence_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(confidence_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(confidence_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = 2.5, do_violin = TRUE)
-
-# Compare usefulness
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Usefulness"
-usefulness_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "two.sided", random_mu = 2.5)
-stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "greater", random_mu = 2.5)
-stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "two.sided", random_mu = 2.5)
-stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "greater", random_mu = 2.5)
-stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "two.sided", random_mu = 2.5)
-stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "greater", random_mu = 2.5)
-stats_a <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "greater")
-stats_c <- stat_compare(usefulness_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = 2.5, do_violin = TRUE)
-
-# Compare perceived complexity
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Complexity"
-usefulness_summary <- summarise_data(survey_results, var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "two.sided", random_mu = 2.5)
-stats_a <- stat_compare(usefulness_summary, var_name, groups = groups[1], h1 = "greater", random_mu = 2.5)
-stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "two.sided", random_mu = 2.5)
-stats_b <- stat_compare(usefulness_summary, var_name, groups = groups[2], h1 = "greater", random_mu = 2.5)
-stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "two.sided", random_mu = 2.5)
-stats_c <- stat_compare(usefulness_summary, var_name, groups = groups[3], h1 = "greater", random_mu = 2.5)
-stats_a <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(usefulness_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "greater")
-stats_c <- stat_compare(usefulness_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, mu = 2.5, do_violin = TRUE)
-
-# Time comparison
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Duration"
-time_summary <- summarise_data(filter_outliers(survey_results, var_name), var_name)
-cat(paste0("\n", toupper(var_name), " EVALUATION...\n"))
-stats_a <- stat_compare(time_summary, var_name, groups =  c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(time_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(time_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, do_violin = TRUE)
 
 ############################################################################################################################
 # STATISTICAL ANALYSES FOR MICRO ACCURACY
@@ -573,49 +919,68 @@ p_score <- ggplot(survey_results, aes(x = Score, fill = Group)) +
   theme(legend.position = "none")
 ggsave(filename = paste0(results_dir, "score_distribution_by_group.png"), plot = p_score, dpi = 300, width = 12, height = 4)
 
-# Compare accuracy
+# Compare variables
+analyse_variable(survey_results, var_name = "Accuracy", is_micro = TRUE)
+analyse_variable(survey_results, var_name = "Compliance", is_micro = TRUE)
+analyse_variable(survey_results, var_name = "Overreliance", is_micro = TRUE)
+analyse_variable(survey_results, var_name = "Underreliance", is_micro = TRUE)
+
+
+############################################################################################################################
+# FINAL QUESTIONNAIRE EVALUATION
+############################################################################################################################
+
+# Solve data issues
+final_questionnaire <- final_questionnaire %>% left_join(preliminary_questionnaire %>% 
+                                                           select(Annotator, Expertise, Familiarity, Trust), by = "Annotator")
+
+# Asses preferences
 cat("\n=====================================================================================================================\n")
-var_name = "Accuracy"
-accuracy_summary <- summarise_data(survey_results, var_name, is_micro = TRUE)
-cat(paste0("\n", toupper(var_name), " MICRO EVALUATION...\n"))
-stats_a <- stat_compare(accuracy_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_a <- stat_compare(accuracy_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "greater")
-stats_b <- stat_compare(accuracy_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(accuracy_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(accuracy_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "greater")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, title_addon = "_micro", do_violin = TRUE)
+pref_df <- final_questionnaire %>% filter(!is.na(Preference), Preference != "") %>% count(Preference) %>%
+  mutate(perc = round(100 * n / sum(n), 1), label = paste0(Preference, "\n", n, " (", perc, "%)"))
+pref_df$Preference <- factor(pref_df$Preference, levels = unique(pref_df$Preference)[c(1, 4, 3, 2)])
+p_pref <- ggplot(pref_df, aes(x = "", y = n, fill = Preference)) + geom_col(width = 1) + coord_polar(theta = "y") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 4) + labs(title = "Preference distribution", 
+                                                                                         fill = "Preference") + 
+  theme(plot.title = element_text(hjust = 0.5), panel.grid = element_blank(), axis.title = element_blank(), 
+        axis.text = element_blank(),axis.ticks = element_blank(), legend.position = "none")
+ggsave(filename = paste0(results_dir, "preference_pieplot.png"), plot = p_pref, dpi = 300, width = 8, height = 6)
 
-# Compare compliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Compliance"
-compliance_summary <- summarise_data(survey_results, var_name, is_micro = TRUE)
-cat(paste0("\n", toupper(var_name), " MICRO EVALUATION...\n"))
-stats_a <- stat_compare(compliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_a <- stat_compare(compliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "greater")
-stats_b <- stat_compare(compliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(compliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, title_addon = "_micro", do_violin = TRUE)
-
-# Compare over-reliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Overreliance"
-overreliance_summary <- summarise_data(survey_results, var_name, is_micro = TRUE)
-cat(paste0("\n", toupper(var_name), " MICRO EVALUATION...\n"))
-stats_a <- stat_compare(overreliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(overreliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(overreliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, title_addon = "_micro", do_violin = TRUE)
-
-# Compare under-reliance
-cat("\n---------------------------------------------------------------------------------------------------------------------\n")
-var_name = "Underreliance"
-underreliance_summary <- summarise_data(survey_results, var_name, is_micro = TRUE)
-cat(paste0("\n", toupper(var_name), " MICRO EVALUATION...\n"))
-stats_a <- stat_compare(underreliance_summary, var_name, groups = c(groups[1], groups[2]), is_paired = TRUE, h1 = "two.sided")
-stats_b <- stat_compare(underreliance_summary, var_name, groups = c(groups[1], groups[3]), is_paired = TRUE, h1 = "two.sided")
-stats_c <- stat_compare(underreliance_summary, var_name, groups = c(groups[2], groups[3]), is_paired = TRUE, h1 = "two.sided")
-plot_compare(rbind(stats_a$res1, stats_a$res2, stats_b$res2), var_name, title_addon = "_micro", do_violin = TRUE)
+# Compare variables
+analyse_variable(final_questionnaire, var_name = "Competence", random_mu = 2.5)
+analyse_variable(final_questionnaire, var_name = "Autonomy", random_mu = 2.5)
+analyse_variable(final_questionnaire, var_name = "Relatedness", random_mu = 2.5)
+analyse_variable(final_questionnaire, var_name = "Enjoyment", random_mu = 2.5)
+analyse_variable(final_questionnaire, var_name = "Demand", random_mu = 2.5)
 
 
+############################################################################################################################
+# EFFECT SIZE EVALUATION
+############################################################################################################################
 
+# Compute participant-level evaluation speed
+duration_summary <- survey_results %>% group_by(Annotator) %>%
+  summarise(Mean_duration = mean(Duration, na.rm = TRUE), .groups = "drop")
+survey_results <- survey_results %>% left_join(duration_summary, by = "Annotator")
+final_questionnaire <- final_questionnaire %>% left_join(duration_summary, by = "Annotator")
 
+# Macro-measurements
+analyse_delta(survey_results, "Accuracy", subgroup_height = 5)
+analyse_delta(survey_results, "Compliance", subgroup_height = 5)
+analyse_delta(survey_results, "Overreliance", subgroup_height = 5)
+analyse_delta(survey_results, "Underreliance", subgroup_height = 5)
+analyse_delta(survey_results, "Confidence", subgroup_height = 5)
+analyse_delta(survey_results, "Usefulness", subgroup_height = 5)
+
+# Micro-measurements
+analyse_delta(survey_results, "Accuracy", is_micro = TRUE, subgroup_height = 5)
+analyse_delta(survey_results, "Compliance", is_micro = TRUE, subgroup_height = 5)
+analyse_delta(survey_results, "Overreliance", is_micro = TRUE, subgroup_height = 5)
+analyse_delta(survey_results, "Underreliance", is_micro = TRUE, subgroup_height = 5)
+
+# Final questionnaire measurements
+analyse_delta(final_questionnaire, "Competence", subgroup_height = 4)
+analyse_delta(final_questionnaire, "Autonomy", subgroup_height = 4)
+analyse_delta(final_questionnaire, "Relatedness", subgroup_height = 4)
+analyse_delta(final_questionnaire, "Enjoyment", subgroup_height = 4)
+analyse_delta(final_questionnaire, "Demand", subgroup_height = 4)
